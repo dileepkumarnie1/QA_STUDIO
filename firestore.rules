@@ -1,0 +1,97 @@
+rules_version = '2';
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: projects
+// Document ID: {projectId}
+// Fields:
+//   - id: string (required)
+//   - name: string (required, 1-100 chars)
+//   - description: string (optional)
+//   - prompt: string (required, 1-5000 chars)
+//   - templateId: string (optional)
+//   - createdAt: number (required)
+//   - updatedAt: number (required)
+//   - userId: string (required, immutable)
+//
+// Collection: projects/{projectId}/messages
+// Document ID: {messageId}
+// Fields:
+//   - id: string (required)
+//   - role: string (required, enum: ['user', 'assistant'])
+//   - content: string (required, 1-10000 chars)
+//   - timestamp: number (required)
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isProjectOwner(projectId) {
+      return isAuthenticated() && request.auth.uid == get(/databases/$(database)/documents/projects/$(projectId)).data.userId;
+    }
+
+    function isValidProject(data) {
+      return data.keys().hasAll(['id', 'name', 'prompt', 'createdAt', 'updatedAt', 'userId']) &&
+             data.id is string &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+             data.prompt is string && data.prompt.size() >= 0 && data.prompt.size() <= 50000 &&
+             data.createdAt is number &&
+             data.updatedAt is number &&
+             data.userId is string;
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['id', 'role', 'content', 'timestamp']) &&
+             data.id is string &&
+             data.role in ['user', 'assistant'] &&
+             data.content is string && data.content.size() >= 1 && data.content.size() <= 500000 &&
+             data.timestamp is number;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /projects/{projectId} {
+      allow read: if isOwner(resource.data.userId);
+      allow create: if isAuthenticated() && 
+                      isValidProject(request.resource.data) && 
+                      request.resource.data.userId == request.auth.uid;
+      allow update: if isOwner(resource.data.userId) && 
+                      isValidProject(request.resource.data) && 
+                      request.resource.data.userId == resource.data.userId;
+      allow delete: if isOwner(resource.data.userId);
+
+      match /messages/{messageId} {
+        allow read: if isProjectOwner(projectId);
+        allow create: if isProjectOwner(projectId) && isValidMessage(request.resource.data);
+        allow update: if false; // Messages are immutable
+        allow delete: if isProjectOwner(projectId);
+      }
+    }
+
+    // ===============================================================
+    // Users Collection
+    // ===============================================================
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId);
+      allow delete: if false;
+    }
+  }
+}
