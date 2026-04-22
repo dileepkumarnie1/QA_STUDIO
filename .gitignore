@@ -11,3 +11,6 @@ firebase-debug.log
 firestore-debug.log
 ui-debug.log
 _audit.py
+firebase-applet-config.json
+firebase-blueprint.json
+metadata.json
