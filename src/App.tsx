@@ -1662,7 +1662,7 @@ function AppContent() {
   };
 
   // Show Excel/PPT/PDF download buttons when any .md files exist in current output
-  const hasMdFiles = fileNames.some(k => k.toLowerCase().endsWith('.md'));
+  const hasMdFiles = fileNames.length > 0 && fileNames.every(k => k.toLowerCase().endsWith('.md'));
 
   if (loading) {
     return (
