@@ -14,6 +14,8 @@ are stored per-user in Firebase Firestore.
 
 - **URL (local):** `http://localhost:3004` *(Vite picks the next free port — check terminal output)*
 - **Backend (local):** `http://localhost:3001`
+- **URL (production):** `https://qa-studio.onrender.com`
+- **GitHub repo:** `https://github.com/dileepkumarnie1/QA_STUDIO` (public, branch `main`)
 - **Firebase project:** `qa-studio-37f60`
 - **Authenticated user:** `dileepkumarnie1@gmail.com`
 
@@ -46,10 +48,56 @@ npm run dev:client   # Vite only
 npm run dev:server   # Express proxy only (tsx watch)
 npm run build        # Production build
 npm run lint         # TypeScript type-check (tsc --noEmit)
+npm run start        # Production: serves built dist/ via Express (used by Render)
 
 # Deploy Firestore rules
 npx firebase-tools deploy --only firestore:rules
 ```
+
+### Pushing Changes to GitHub / Render
+
+Render auto-deploys on every push to `main`. To push:
+
+```powershell
+# If VS Code's git extension holds .git/index.lock, disable it first:
+# VS Code Settings → "git.enabled" → false
+# Then run:
+git add -A
+git commit -m "your message"
+git push origin main
+# Re-enable "git.enabled" → true afterwards
+```
+
+> **VS Code index.lock conflict:** VS Code's Source Control extension can hold `.git/index.lock`
+> continuously. Disable `"git.enabled": false` in User Settings before running git in the terminal,
+> then re-enable after push.
+
+### Production Deployment (Render)
+
+- **Platform:** Render.com free tier Web Service
+- **Build command:** `npm install && npm run build`
+- **Start command:** `npm run start` → runs `tsx server/index.ts`
+- **Auto-deploy:** Yes — every push to `main` triggers a new deploy
+- **Cold start:** Free tier spins down after ~15 min inactivity. First request after sleep gets a
+  502 / timeout while it wakes (30–60 seconds). This is **expected behaviour**, not a bug.
+  Upgrade to paid tier ($7/month) to keep always-on.
+- **Logs:** Render dashboard → your service → **Logs** tab
+
+#### Render Environment Variables (all set in Render dashboard)
+
+| Key | Value |
+|---|---|
+| `GEMINI_API_KEY` | rotated key from `.env.local` |
+| `VITE_FIREBASE_API_KEY` | from `.env.local` |
+| `VITE_FIREBASE_AUTH_DOMAIN` | `qa-studio-37f60.firebaseapp.com` |
+| `VITE_FIREBASE_PROJECT_ID` | `qa-studio-37f60` |
+| `VITE_FIREBASE_STORAGE_BUCKET` | `qa-studio-37f60.firebasestorage.app` |
+| `VITE_FIREBASE_MESSAGING_SENDER_ID` | `840945337999` |
+| `VITE_FIREBASE_APP_ID` | `1:840945337999:web:68232403bc8128de81d2fa` |
+| `VITE_FIREBASE_MEASUREMENT_ID` | `G-MSX381ZX0H` |
+
+> `FIREBASE_SERVICE_ACCOUNT_JSON` is **not** set — token verification is skipped in prod
+> (Firestore security rules still enforce per-user data access at DB layer).
 
 > **Port note:** Vite tries 3000 first and increments if occupied. Express backend always uses 3001.
 > If 3001 is stuck: `Get-NetTCPConnection -LocalPort 3001 | % { Stop-Process -Id $_.OwningProcess -Force }`
@@ -103,7 +151,8 @@ qa-studio/
 ├── firebase.json          # { "firestore": { "rules": "firestore.rules" } }
 ├── .firebaserc            # { "projects": { "default": "qa-studio-37f60" } }
 ├── .env.local             # Local secrets (gitignored)
-├── .env.example           # Template for env vars
+├── .env.example           # Template for env vars (committed — no secrets)
+├── .gitignore             # Includes: .env.local, firebase-applet-config.json, firebase-blueprint.json, metadata.json
 └── AGENTS.md              # This file
 ```
 
@@ -393,6 +442,26 @@ projects/{projectId}/messages/{messageId}
 - Redeployed Firestore rules
 - Dialog widened `max-w-2xl` → `max-w-3xl`; added `max-h-[90vh]` + scrollable content area
 
+### Session 16 — Production Deployment
+- **Production-hardened `server/index.ts`:**
+  - Added `import path from 'path'` + `fileURLToPath` for ESM `__dirname` fix
+  - CORS middleware added before all routes
+  - Firebase Admin now supports both `GOOGLE_APPLICATION_CREDENTIALS` (file) and `FIREBASE_SERVICE_ACCOUNT_JSON` (JSON string for PaaS)
+  - Static file serving: `express.static(dist/)` + SPA fallback (`*` → `dist/index.html`)
+  - Graceful shutdown: `process.on('SIGTERM', ...)` closes server before exit
+- **`package.json`:** renamed to `qa-studio`, added `"start": "tsx server/index.ts"`, moved `tsx` to `dependencies`, removed duplicate `vite` and `shadcn` from wrong dep groups
+- **`src/lib/firebase.ts`:** removed import of gitignored `firebase-applet-config.json`; now only reads `VITE_FIREBASE_*` env vars; throws if required vars missing
+- **`.gitignore`:** added `.firebase/`, `firebase-debug.log`, `firestore-debug.log`, `firebase-applet-config.json`, `firebase-blueprint.json`, `metadata.json`
+- **`.env.example`:** rewritten with clear sections for all vars including `FIREBASE_SERVICE_ACCOUNT_JSON`
+- **Security:** `firebase-applet-config.json` was accidentally committed (contained `gen-lang-client-*` Firebase key) — removed from git history with `git rm --cached`, key revoked and rotated in Google Cloud Console
+- **GitHub:** repo created at `https://github.com/dileepkumarnie1/QA_STUDIO`, all code pushed to `main`
+- **Render:** deployed at `https://qa-studio.onrender.com`, auto-deploys on push to `main`
+- **Firebase Authorized Domains:** `qa-studio.onrender.com` added to Firebase Console → Authentication → Settings → Authorized domains
+
+### Session 17 — Download Button Fix
+- **Bug:** Download Excel / PPT / PDF buttons appeared for all projects (framework + playbook) whenever any `.md` file existed (e.g. `README.md` in a framework output)
+- **Fix:** Changed `hasMdFiles` in `src/App.tsx` from `fileNames.some(k => k.endsWith('.md'))` to `fileNames.length > 0 && fileNames.every(k => k.endsWith('.md'))` — now only true when **all** output files are `.md` (playbook-only outputs)
+
 ---
 
 ## Known Issues / Open Work
@@ -402,6 +471,7 @@ projects/{projectId}/messages/{messageId}
 | LOW | Groq provider has no suggestion chips | By design — Groq returns plain string, no parallel call |
 | LOW | No pagination on project list | `subscribeToProjects` returns all user projects |
 | LOW | Attachment upload UX (Camera/Drive items non-functional) | Dropdown items wired to `fileInputRef.click()` as placeholder |
+| LOW | Render free tier cold starts | First request after ~15 min idle returns 502 while service wakes. Upgrade to paid tier to fix. |
 
 All 14 original security audit issues are resolved.
 
@@ -429,3 +499,12 @@ All 14 original security audit issues are resolved.
    ```powershell
    Get-NetTCPConnection -LocalPort 3001 | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
    ```
+
+9. **VS Code git index.lock conflict:** VS Code's Source Control extension holds `.git/index.lock` while the workspace is open. When running `git` commands in the terminal from VS Code, disable the extension first:
+   - Open User Settings JSON → set `"git.enabled": false` → run git commands → set back to `true`
+
+10. **Render cold start 502:** Free tier services sleep after ~15 min of inactivity. The first HTTP request returns 502 while the instance boots (30–60 sec). This is **not** a code bug — simply retry the request.
+
+11. **Exposed secrets in git:** `firebase-applet-config.json` was accidentally committed in an early session (contained a Firebase API key from an AI Studio project). Key was revoked in Google Cloud Console and the file is now gitignored. If you see a GitHub secret scanning alert for this file, the key is already rotated.
+
+12. **`hasMdFiles` logic:** Controls visibility of Download Excel/PPT/PDF buttons. Uses `fileNames.every(k => k.endsWith('.md'))` so buttons only appear when ALL output files are `.md` (i.e. Strategy Playbook outputs). Do not change this to `some()` — that would incorrectly show the buttons for framework outputs that have a `README.md`.
