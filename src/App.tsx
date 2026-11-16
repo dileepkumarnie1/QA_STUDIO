@@ -1681,7 +1681,7 @@ function AppContent() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-[var(--qa-bg)]">
+      <div className="flex items-center justify-center min-h-screen qa-canvas">
         <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
       </div>
     );
@@ -1689,29 +1689,48 @@ function AppContent() {
 
   if (!user) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-[var(--qa-bg)] text-white p-4">
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
+      <div className="relative flex flex-col items-center justify-center min-h-screen qa-canvas text-white p-6 overflow-hidden">
+        <div aria-hidden className="qa-orb pointer-events-none absolute -top-24 left-1/2 -translate-x-[70%] w-[34rem] h-[34rem] rounded-full bg-blue-500/20" />
+        <div aria-hidden className="qa-orb pointer-events-none absolute top-1/3 left-1/2 translate-x-[10%] w-[28rem] h-[28rem] rounded-full bg-violet-500/20" style={{ animationDelay: '-7s' }} />
+        <motion.div
+          initial={{ opacity: 0, y: 24 }}
           animate={{ opacity: 1, y: 0 }}
-          className="max-w-md w-full text-center space-y-8"
+          transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+          className="relative max-w-xl w-full text-center"
         >
-          <div className="flex justify-center">
-            <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20">
-              <Layout className="w-10 h-10 text-white" />
+          <div className="flex justify-center mb-8">
+            <div className="qa-logo w-16 h-16 rounded-[1.35rem] flex items-center justify-center">
+              <Layout className="w-8 h-8 text-white" />
             </div>
           </div>
-          <div className="space-y-2">
-            <h1 className="text-4xl font-bold tracking-tight">QA Studio</h1>
-            <p className="text-gray-400">The AI-powered command center for software testing architects.</p>
+          <h1 className="text-5xl md:text-7xl font-semibold tracking-tight qa-headline pb-2">QA Studio</h1>
+          <p className="mt-4 text-xl md:text-2xl font-medium tracking-tight text-gray-300">
+            Test frameworks, <span className="qa-accent-text">generated in minutes.</span>
+          </p>
+          <p className="mt-3 text-gray-500 max-w-md mx-auto">
+            The AI-powered command center for software testing architects.
+          </p>
+          <div className="mt-10 max-w-sm mx-auto">
+            <Button
+              onClick={login}
+              size="lg"
+              className="w-full bg-white text-black hover:bg-gray-100 font-medium h-14 text-base rounded-full gap-3 shadow-xl shadow-black/20 transition-transform hover:-translate-y-0.5"
+            >
+              <svg viewBox="0 0 48 48" className="w-5 h-5" aria-hidden>
+                <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+                <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+                <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+                <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+              </svg>
+              Continue with Google
+            </Button>
           </div>
-          <Button 
-            onClick={login}
-            size="lg"
-            className="w-full bg-white text-black hover:bg-gray-200 font-semibold py-6 text-lg rounded-xl"
-          >
-            Sign in with Google
-          </Button>
-          <p className="text-xs text-gray-500">
+          <div className="mt-10 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-gray-500">
+            <span className="inline-flex items-center gap-2"><Sparkles className="w-4 h-4 text-blue-400" /> AI-generated frameworks</span>
+            <span className="inline-flex items-center gap-2"><Eye className="w-4 h-4 text-blue-400" /> Live preview</span>
+            <span className="inline-flex items-center gap-2"><Download className="w-4 h-4 text-blue-400" /> One-click download</span>
+          </div>
+          <p className="mt-10 text-xs text-gray-600">
             By signing in, you agree to our Terms of Service and Privacy Policy.
           </p>
         </motion.div>
@@ -1720,19 +1739,19 @@ function AppContent() {
   }
 
   return (
-    <div className="flex h-screen bg-[var(--qa-bg)] text-gray-100 overflow-hidden font-sans">
+    <div className="flex h-screen qa-canvas text-gray-100 overflow-hidden font-sans">
       {/* Desktop Sidebar */}
-      <aside className={`hidden flex-col w-72 border-r border-gray-800 bg-[var(--qa-surface)] shrink-0 ${isLeftPanelOpen ? 'md:flex' : ''}`}>
+      <aside className={`hidden flex-col w-72 border-r border-[var(--qa-hairline)] qa-glass shrink-0 ${isLeftPanelOpen ? 'md:flex' : ''}`}>
         <div className="p-4 flex items-center justify-between">
           <button
             onClick={() => { setActiveProject(null); setSelectedTemplate(null); }}
             className="flex items-center gap-3 hover:opacity-80 transition-opacity"
             title="Go to home"
           >
-            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-violet-600 rounded-xl shadow-md shadow-blue-500/20 flex items-center justify-center">
+            <div className="qa-logo w-8 h-8 rounded-[0.7rem] flex items-center justify-center">
               <Layout className="w-5 h-5 text-white" />
             </div>
-            <span className="font-bold text-xl tracking-tight">QA Studio</span>
+            <span className="font-semibold text-lg tracking-tight">QA Studio</span>
           </button>
           <button
             onClick={() => setIsLeftPanelOpen(false)}
@@ -1746,7 +1765,7 @@ function AppContent() {
         <div className="px-4 mb-4">
           <Button 
             onClick={() => { setActiveProject(null); setSelectedTemplate(null); }}
-            className="w-full justify-start gap-2 bg-gray-800/70 hover:bg-gray-700/70 text-white border border-gray-700/50 hover:border-gray-600/60"
+            className="w-full justify-start gap-2 h-10 rounded-xl bg-gray-800/70 hover:bg-gray-700/70 text-white border border-[var(--qa-hairline)]"
           >
             <Plus className="w-4 h-4" />
             New Project
@@ -1755,7 +1774,7 @@ function AppContent() {
 
         <ScrollArea className="flex-1 px-4">
           <div className="space-y-1 py-2">
-            <div className="text-xs font-semibold text-gray-500 uppercase tracking-[0.13em] mb-2 px-2">History</div>
+            <div className="text-xs font-medium text-gray-500 mb-2 px-3">Recent</div>
             {(historyExpanded ? projects : projects.slice(0, 3)).map((p) => (
               <div key={p.id} className="flex items-center group justify-between">
                 {renamingProjectId === p.id ? (
@@ -1783,7 +1802,7 @@ function AppContent() {
                       onClick={() => setActiveProject(p)}
                       onDoubleClick={() => startRename(p)}
                       className={`flex-1 min-w-0 text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${
-                        activeProject?.id === p.id ? 'bg-blue-600/15 text-blue-400 font-medium border-l-2 border-l-blue-500 pl-[10px]' : 'hover:bg-gray-800/80 text-gray-400 pl-3'
+                        activeProject?.id === p.id ? 'bg-gray-800/80 text-white font-medium' : 'hover:bg-gray-800/60 text-gray-400'
                       }`}
                     >
                       <History className="w-4 h-4 flex-shrink-0" />
@@ -1824,7 +1843,7 @@ function AppContent() {
           </div>
         </ScrollArea>
 
-        <div className="p-4 border-t border-gray-800 space-y-4">
+        <div className="p-4 border-t border-[var(--qa-hairline)] space-y-4">
           <div className="flex items-center gap-3 px-2">
             <Avatar className="w-8 h-8 border border-gray-700">
               <AvatarImage src={user.photoURL || ''} />
@@ -1842,7 +1861,7 @@ function AppContent() {
       </aside>
 
       {/* Mobile Header */}
-      <div className="md:hidden fixed top-0 left-0 right-0 h-14 bg-[var(--qa-surface)] border-b border-gray-800 flex items-center justify-between px-4 z-50">
+      <div className="md:hidden fixed top-0 left-0 right-0 h-14 qa-glass border-b border-[var(--qa-hairline)] flex items-center justify-between px-4 z-50">
         <div className="flex items-center gap-2">
           <Layout className="w-5 h-5 text-blue-500" />
           <span className="font-bold">QA Studio</span>
@@ -1964,14 +1983,14 @@ function AppContent() {
                   className="space-y-8 w-full"
                 >
                   <div className="space-y-4 text-center">
-                    <h2 className="text-3xl md:text-5xl font-extrabold tracking-tighter bg-gradient-to-r from-white to-gray-500 bg-clip-text text-transparent">
-                      What are we testing today?
+                    <h2 className="text-4xl md:text-6xl font-semibold tracking-tight qa-headline pb-1">
+                      What are we testing <span className="qa-accent-text">today?</span>
                     </h2>
-                    <p className="text-gray-400 text-lg">Describe your testing requirements or select a template below.</p>
+                    <p className="text-gray-400 text-lg md:text-xl">Describe what you need, or start from a template.</p>
                   </div>
 
                   {/* New Prompt Input Area */}
-                  <div className="max-w-3xl mx-auto w-full mt-8 relative rounded-3xl border border-gray-800 bg-[var(--qa-card)] p-2 focus-within:border-blue-500/40 focus-within:shadow-blue-500/10 focus-within:shadow-xl transition-all shadow-lg shadow-black/20">
+                  <div className="qa-composer max-w-3xl mx-auto w-full mt-10 p-2">
                     {attachments.length > 0 && (
                       <div className="absolute bottom-full left-0 mb-2 flex flex-wrap gap-2 p-2 bg-[var(--qa-card-alt)] border border-gray-800 rounded-xl w-full">
                         {attachments.map((file, index) => (
@@ -1995,8 +2014,8 @@ function AppContent() {
                       value={homePrompt}
                       onChange={(e) => setHomePrompt(e.target.value)}
                       onPaste={handlePaste}
-                      placeholder="Start typing a prompt to see what our models can do"
-                      className="w-full bg-transparent border-none focus-visible:ring-0 min-h-[100px] resize-none text-gray-200 placeholder:text-gray-500 text-lg p-4"
+                      placeholder="Describe the test framework you want to build…"
+                      className="w-full bg-transparent dark:bg-transparent border-none shadow-none focus-visible:ring-0 min-h-[100px] resize-none text-gray-200 placeholder:text-gray-500 text-lg p-4"
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && !e.shiftKey) {
                           e.preventDefault();
@@ -2007,7 +2026,7 @@ function AppContent() {
                     <div className="flex items-center justify-between p-2 mt-2">
                       <div className="flex items-center gap-2">
                         <DropdownMenu>
-                          <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="text-gray-400 border-gray-800 hover:text-white hover:bg-gray-800 rounded-full gap-2 px-4 h-10">
+                          <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="text-gray-400 border-[var(--qa-hairline)] bg-transparent hover:text-white hover:bg-gray-800 rounded-full w-10 h-10 p-0" title="Attach files">
                               <Plus className="w-4 h-4" />
                             </Button>}>
                           </DropdownMenuTrigger>
@@ -2029,49 +2048,16 @@ function AppContent() {
                           title="Enhance prompt with AI"
                           disabled={!homePrompt.trim()}
                           onClick={openHomeEnhancer}
-                          className="text-purple-400 border-purple-500/30 hover:text-purple-200 hover:bg-purple-500/10 hover:border-purple-400/60 rounded-full gap-2 px-4 h-10 transition-colors"
+                          className="text-[var(--qa-accent-2)] border-[var(--qa-hairline)] bg-transparent hover:bg-[var(--qa-card-alt)] rounded-full gap-2 px-4 h-10 transition-colors"
                         >
                           <Sparkles className="w-4 h-4" /> Enhance
                         </Button>
-                        <Button variant="outline" size="sm" className="text-gray-400 border-gray-800 hover:text-white hover:bg-gray-800 rounded-full gap-2 px-4 h-10">
-                          <Layout className="w-4 h-4" /> Tools
-                        </Button>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Button variant="ghost" size="icon" className="text-gray-400 hover:text-white hover:bg-gray-800 rounded-full w-10 h-10 bg-gray-800/50">
-                          <Mic className="w-5 h-5" />
-                        </Button>
-                        
-                        <DropdownMenu>
-                          <DropdownMenuTrigger render={<Button variant="ghost" size="icon" className="text-gray-400 hover:text-white hover:bg-gray-800 rounded-full w-10 h-10 bg-gray-800/50" />}>
-                              <Plus className="w-5 h-5" />
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-56 bg-[var(--qa-card-alt)] border-gray-800 text-gray-200 rounded-xl shadow-xl p-2">
-                            <DropdownMenuItem className="gap-3 cursor-pointer hover:bg-gray-800 focus:bg-gray-800 rounded-lg p-3">
-                              <Database className="w-4 h-4" /> Drive
-                            </DropdownMenuItem>
-                            <DropdownMenuItem className="gap-3 cursor-pointer hover:bg-gray-800 focus:bg-gray-800 rounded-lg p-3">
-                              <Upload className="w-4 h-4" /> Upload files
-                            </DropdownMenuItem>
-                            <DropdownMenuItem className="gap-3 cursor-pointer hover:bg-gray-800 focus:bg-gray-800 rounded-lg p-3">
-                              <Mic className="w-4 h-4" /> Record Audio
-                            </DropdownMenuItem>
-                            <DropdownMenuItem className="gap-3 cursor-pointer hover:bg-gray-800 focus:bg-gray-800 rounded-lg p-3">
-                              <Camera className="w-4 h-4" /> Camera
-                            </DropdownMenuItem>
-                            <DropdownMenuItem className="gap-3 cursor-pointer hover:bg-gray-800 focus:bg-gray-800 rounded-lg p-3">
-                              <Video className="w-4 h-4" /> YouTube Video
-                            </DropdownMenuItem>
-                            <DropdownMenuItem className="gap-3 cursor-pointer hover:bg-gray-800 focus:bg-gray-800 rounded-lg p-3">
-                              <ImageIcon className="w-4 h-4" /> Sample Media
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-
                         <Button 
                           onClick={handleCreateProjectWithPrompt}
                           disabled={(!homePrompt.trim() && attachments.length === 0) || isGenerating}
-                          className="bg-white text-black hover:bg-gray-100 rounded-full px-6 h-10 font-semibold gap-2 ml-2 shadow-sm"
+                          className="qa-primary rounded-full px-6 h-10 font-medium gap-2 ml-2"
                         >
                           Run <Send className="w-4 h-4" />
                         </Button>
@@ -2080,24 +2066,21 @@ function AppContent() {
                   </div>
 
                   {/* Collection tabs */}
-                  <div className="flex gap-2 w-full mt-12 overflow-x-auto pb-1 scrollbar-hide">
-                    {COLLECTIONS.map((col) => (
-                      <button
-                        key={String(col.id)}
-                        onClick={() => setActiveCollection(col.id)}
-                        className={`shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 border ${
-                          activeCollection === col.id
-                            ? 'bg-blue-600/20 text-blue-300 border-blue-500/40'
-                            : 'bg-[var(--qa-card)] text-gray-400 border-gray-800 hover:text-white hover:border-gray-600'
-                        }`}
-                      >
-                        <span>{col.emoji}</span>
-                        {col.label}
-                      </button>
-                    ))}
+                  <div className="w-full mt-14 overflow-x-auto scrollbar-hide flex md:justify-center">
+                    <div className="qa-segment shrink-0" role="group" aria-label="Template collections">
+                      {COLLECTIONS.map((col) => (
+                        <button
+                          key={String(col.id)}
+                          onClick={() => setActiveCollection(col.id)}
+                          aria-pressed={activeCollection === col.id}
+                        >
+                          {col.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 w-full mt-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 w-full mt-6">
                     {TEMPLATES.filter((t) => activeCollection === null || t.collection === activeCollection).map((t) => {
                       const Icon = IconMap[t.icon];
                       return (
@@ -2107,11 +2090,11 @@ function AppContent() {
                           onClick={() => setSelectedTemplate(t)}
                         >
                           <CardHeader className="flex flex-row items-center gap-4 space-y-0 pb-2">
-                            <div className="w-12 h-12 rounded-xl bg-gray-800/80 flex items-center justify-center group-hover:bg-blue-600/20 group-hover:shadow-md group-hover:shadow-blue-500/20 transition-all duration-200 shrink-0">
-                              <Icon className="w-6 h-6 text-gray-400 group-hover:text-blue-400" />
+                            <div className="w-11 h-11 rounded-[0.9rem] bg-gray-800/80 flex items-center justify-center group-hover:bg-blue-600/20 transition-all duration-300 shrink-0">
+                              <Icon className="w-5 h-5 text-gray-400 group-hover:text-blue-400 transition-colors" />
                             </div>
                             <div className="text-left">
-                              <CardTitle className="text-lg text-white">{t.name}</CardTitle>
+                              <CardTitle className="text-[1.05rem] font-semibold tracking-tight text-white">{t.name}</CardTitle>
                             </div>
                           </CardHeader>
                           <CardContent className="flex-1">
@@ -2146,9 +2129,8 @@ function AppContent() {
                       animate={{ opacity: 1, y: 0 }}
                       className="w-full mt-20 space-y-6"
                     >
-                      <div className="flex items-center gap-3 border-b border-gray-800 pb-4">
-                        <History className="w-6 h-6 text-blue-500" />
-                        <h3 className="text-2xl font-semibold text-white">Recent Projects</h3>
+                      <div className="flex items-center gap-3 pb-1">
+                        <h3 className="text-2xl font-semibold tracking-tight text-white">Recent projects</h3>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                         {projects.slice(0, 6).map(p => (

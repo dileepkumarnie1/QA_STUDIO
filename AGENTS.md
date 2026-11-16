@@ -96,8 +96,8 @@ git push origin main
 | `VITE_FIREBASE_APP_ID` | `1:840945337999:web:68232403bc8128de81d2fa` |
 | `VITE_FIREBASE_MEASUREMENT_ID` | `G-MSX381ZX0H` |
 
-> `FIREBASE_SERVICE_ACCOUNT_JSON` is **not** set — token verification is skipped in prod
-> (Firestore security rules still enforce per-user data access at DB layer).
+> `FIREBASE_SERVICE_ACCOUNT_JSON` is **not** set and is not needed — ID tokens are verified
+> using the project ID alone, so API auth is always enforced (see Session 18).
 
 > **Port note:** Vite tries 3000 first and increments if occupied. Express backend always uses 3001.
 > If 3001 is stuck: `Get-NetTCPConnection -LocalPort 3001 | % { Stop-Process -Id $_.OwningProcess -Force }`
@@ -261,8 +261,8 @@ Body: {
 Response: { text: string, suggestions: string[] }
 Errors:  { error: string }  (generic — details logged server-side only)
 ```
-- Auth: `requireAuth` — passes in dev (no `GOOGLE_APPLICATION_CREDENTIALS`), `verifyIdToken` in prod
-- Rate limit: 30 req/min per IP (`generateLimiter`)
+- Auth: `requireAuth` — `verifyIdToken` always (project ID only; no service account needed)
+- Rate limit: 30 req/min per user (`generateLimiter`) + 120 req/min per IP on all `/api` (`apiLimiter`)
 - Model allowlist: `ALLOWED_MODELS` Set; unknown model → `gemini-2.5-pro`
 - Temperature clamped to `[0, 2]`
 - `systemInstruction` always server-built; any client-supplied value is ignored
@@ -462,6 +462,20 @@ projects/{projectId}/messages/{messageId}
 - **Bug:** Download Excel / PPT / PDF buttons appeared for all projects (framework + playbook) whenever any `.md` file existed (e.g. `README.md` in a framework output)
 - **Fix:** Changed `hasMdFiles` in `src/App.tsx` from `fileNames.some(k => k.endsWith('.md'))` to `fileNames.length > 0 && fileNames.every(k => k.endsWith('.md'))` — now only true when **all** output files are `.md` (playbook-only outputs)
 
+### Session 18 — Security Hardening II + Visual Refresh
+- **Auth now fails closed.** `server/index.ts` always verifies Firebase ID tokens on `/api/generate` and `/api/enhance-prompt`. `verifyIdToken` only needs the project ID, so no service account is required. Previously auth was skipped whenever no service account was configured — which was the case in production, leaving the Gemini proxy open to anyone.
+  - Local-only escape hatch: `DISABLE_AUTH=true` (ignored when `NODE_ENV=production` or `RENDER` is set).
+- Email allowlist enforced **server-side** (`ALLOWED_EMAILS`, falls back to `VITE_ALLOWED_EMAILS`) and on every `onAuthStateChanged`, not only at the sign-in click.
+- Wildcard CORS removed — same-origin by default; extra origins via `ALLOWED_ORIGINS`.
+- `app.set('trust proxy', 1)`; AI rate limit keyed by verified UID (30/min) plus a per-IP limit on all `/api` routes (120/min).
+- Security headers (nosniff, frame deny, referrer policy, HSTS in prod); unknown `/api/*` routes return JSON 404.
+- Server validates `previousMessages` / `attachments` shape, size and MIME type.
+- **Stored XSS fixed:** model-supplied filenames are sanitised in `parsedFiles` and escaped in `richPreviewHtml`; the PDF print tab (a same-origin `blob:` URL) now carries a nonce CSP.
+- `firestore.rules`: user profiles validated (`isValidUserProfile`), `createdAt` immutable on users and projects, `description` ≤ 2,000 chars. **Must be deployed:** `npx firebase-tools deploy --only firestore:rules`.
+- `saveUserProfile` no longer overwrites `createdAt` on every login.
+- Removed unused `xlsx` dependency (unpatched advisories) and ran `npm audit fix` (45 → 17 advisories, remainder are transitive in `firebase-admin`/build tooling).
+- **Visual refresh (presentation only):** new tokens and a `qa-*` utility layer at the end of `src/index.css` (`qa-canvas`, `qa-glass`, `qa-composer`, `qa-primary`, `qa-segment`, `qa-headline`, `qa-logo`); neutral grey scale and single accent blue defined in `@theme`; system font stack with Geist fallback. Redesigned sign-in screen, home hero, prompt composer and collection filter. Removed placeholder controls that had no handlers (Tools, Mic, second attach menu) from the home composer.
+
 ---
 
 ## Known Issues / Open Work
@@ -491,7 +505,7 @@ All 14 original security audit issues are resolved.
 
 5. **Firestore `orderBy` restriction:** `subscribeToProjects` must NOT use `orderBy` without a composite index. Uses `where('userId')` only and sorts client-side.
 
-6. **Server auth in dev:** `requireAuth` is a no-op when `GOOGLE_APPLICATION_CREDENTIALS` is not set. In production, point that env var to a Firebase service account JSON.
+6. **Server auth is always on:** `requireAuth` verifies the Firebase ID token in dev and prod. For local work without signing in, set `DISABLE_AUTH=true` (never honoured in production). Do not reintroduce a "skip auth when no credentials" path.
 
 7. **Firestore prompt/content limits:** `isValidProject.prompt` ≤ 50,000 chars; `isValidMessage.content` ≤ 500,000 chars. Enhanced prompts (High level) are typically 2,000–4,000 chars — well within limits.
 
