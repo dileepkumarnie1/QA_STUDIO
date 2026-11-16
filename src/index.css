@@ -694,3 +694,17 @@ html:not(.dark) .hljs-meta, html:not(.dark) .hljs-doctag { color: #6e6e73; }
 @media (max-width: 767px) {
   [data-slot="resizable-panel"]:has(> .qa-pane-hidden) { display: none !important; }
 }
+
+/* ── Compact reply card ── */
+.qa-summary { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.qa-summary p { margin: 0; }
+.qa-stat {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--qa-hairline);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--qa-accent) 9%, transparent), transparent 60%), color-mix(in srgb, var(--qa-card-alt) 55%, transparent);
+}
+.qa-stat-value { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.03em; line-height: 1.1; color: var(--qa-text-primary); }
+.qa-stat-label { font-size: 0.7rem; color: var(--qa-text-muted); }
+.qa-filechip--more { font-family: var(--font-sans); color: var(--qa-accent); border-style: dashed; }

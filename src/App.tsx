@@ -302,6 +302,12 @@ function AppContent() {
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   // Phones show one pane at a time instead of a cramped side-by-side split.
   const [mobilePane, setMobilePane] = useState<'chat' | 'workspace'>('chat');
+  // Preview iframe: mounted on first visit, then kept alive across Code/Preview
+  // switches so the (large) Streamlit runtime is not downloaded again each time.
+  const [previewVisited, setPreviewVisited] = useState(false);
+  const [previewKey, setPreviewKey] = useState(0);
+  const previewFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const previewRetriesRef = useRef(0);
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true);
   const [theme, setTheme] = useState<'dark' | 'light' | 'system'>(() => {
     return (localStorage.getItem('qa-theme') as 'dark' | 'light' | 'system') || 'dark';
@@ -469,6 +475,19 @@ function AppContent() {
         function wrap(fn){ return function(s,t,url){ try{ fn.call(history,s,t,url); }catch(e){} }; }
         history.pushState = wrap(history.pushState);
         history.replaceState = wrap(history.replaceState);
+      })();
+      // Tell the host page if a lazily-loaded component script failed to download,
+      // so it can reload the preview instead of leaving a permanent error box.
+      (function(){
+        var checks = 0;
+        var timer = setInterval(function(){
+          if (++checks > 120) { clearInterval(timer); return; }
+          var text = document.body ? document.body.textContent || '' : '';
+          if (text.indexOf('Failed to fetch dynamically imported module') !== -1) {
+            clearInterval(timer);
+            try { parent.postMessage({ type: 'qa-preview-chunk-error' }, '*'); } catch (e) {}
+          }
+        }, 2000);
       })();
     </script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@1.6.1/build/stlite.css" />
@@ -1683,6 +1702,34 @@ function AppContent() {
   // Show Excel/PPT/PDF download buttons when any .md files exist in current output
   const hasMdFiles = fileNames.length > 0 && fileNames.every(k => k.toLowerCase().endsWith('.md'));
 
+  // ── Preview lifecycle ───────────────────────────────────────────────────────
+  useEffect(() => {
+    setPreviewVisited(rightPaneMode === 'preview');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject?.id]);
+  useEffect(() => {
+    if (rightPaneMode === 'preview') setPreviewVisited(true);
+  }, [rightPaneMode]);
+  useEffect(() => { previewRetriesRef.current = 0; }, [htmlPreviewFile]);
+  useEffect(() => {
+    // The Streamlit runtime lazy-loads big chart/table scripts from a public CDN.
+    // If one of those downloads fails the component shows an error box forever,
+    // so the preview page reports it and we reload the preview (twice at most).
+    const onMessage = (e: MessageEvent) => {
+      if (e.data?.type !== 'qa-preview-chunk-error') return;
+      if (e.source !== previewFrameRef.current?.contentWindow) return;
+      if (previewRetriesRef.current >= 2) {
+        toast('Preview could not load some components. Check your connection, then use Reload preview.', 'info');
+        return;
+      }
+      previewRetriesRef.current += 1;
+      setPreviewKey(k => k + 1);
+      toast('Preview hit a network error — reloading it', 'info');
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
   // ── Command palette (Ctrl/⌘ + K) ───────────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -2504,6 +2551,7 @@ function AppContent() {
                           showCheckpoint={m.role === 'assistant' && !isLastAssistant}
                           isActiveCheckpoint={checkpointMsgId === m.id}
                           onToggleCheckpoint={() => setCheckpointMsgId(checkpointMsgId === m.id ? null : m.id)}
+                          isLatest={isLastAssistant}
                         />
                       );
                     })}
@@ -2722,6 +2770,13 @@ function AppContent() {
                       {/* Viewport controls - only shown in preview mode */}
                       {rightPaneMode === 'preview' && htmlPreviewFile && (
                         <div className="flex items-center gap-1">
+                          <button
+                            title="Reload preview"
+                            onClick={() => { previewRetriesRef.current = 0; setPreviewKey(k => k + 1); }}
+                            className="qa-icon-btn mr-1"
+                          >
+                            <RefreshCw className="w-4 h-4" />
+                          </button>
                           <div className="flex items-center bg-[var(--qa-card)] p-1 rounded-lg border border-gray-800 mr-2">
                             <button
                               title="Desktop"
@@ -2773,7 +2828,7 @@ function AppContent() {
                       </div>
                     )}
 
-                  {rightPaneMode === 'code' ? (
+                  {rightPaneMode === 'code' && (
                     <div className="flex-1 flex min-h-0 max-md:flex-col">
                       {fileNames.length > 0 ? (
                         <>
@@ -2818,8 +2873,9 @@ function AppContent() {
                         </div>
                       )}
                     </div>
-                  ) : (
-                    <div className="flex-1 flex flex-col overflow-hidden">
+                  )}
+                  {previewVisited && (
+                    <div className={`flex-1 flex flex-col overflow-hidden ${rightPaneMode === 'preview' ? '' : 'hidden'}`}>
                       {htmlPreviewFile ? (
                         <div className="flex-1 flex items-start justify-center overflow-auto p-4">
                           <div
@@ -2831,6 +2887,8 @@ function AppContent() {
                             }}
                           >
                             <iframe
+                              key={previewKey}
+                              ref={previewFrameRef}
                               srcDoc={htmlPreviewFile}
                               className="w-full h-full border-none bg-white"
                               style={{ minHeight: '600px' }}
