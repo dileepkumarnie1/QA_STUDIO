@@ -77,7 +77,9 @@ import {
   Network,
   Building2,
   FileSpreadsheet,
-  FileDown
+  FileDown,
+  ArrowDown,
+  Command as CommandIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
@@ -109,6 +111,12 @@ import { Label } from '@/components/ui/label';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { FileTree, buildFileTree } from './components/FileTree';
+import { ChatMessage } from './components/ChatMessage';
+import { GenerationProgress } from './components/GenerationProgress';
+import { CodeViewer } from './components/CodeViewer';
+import { CommandPalette, type Command } from './components/CommandPalette';
+import { Toaster, toast } from './components/Toaster';
+import { sanitizeFilename, titleFromPrompt, relativeTime } from './lib/files';
 
 const IconMap: Record<string, any> = {
   Globe,
@@ -289,6 +297,11 @@ function AppContent() {
   
   // Settings State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [projectQuery, setProjectQuery] = useState('');
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  // Phones show one pane at a time instead of a cramped side-by-side split.
+  const [mobilePane, setMobilePane] = useState<'chat' | 'workspace'>('chat');
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true);
   const [theme, setTheme] = useState<'dark' | 'light' | 'system'>(() => {
     return (localStorage.getItem('qa-theme') as 'dark' | 'light' | 'system') || 'dark';
@@ -312,17 +325,8 @@ function AppContent() {
       let match;
       while ((match = codeBlockRegex.exec(msg.content)) !== null) {
         const lang = match[1] || 'txt';
-        // Filenames come from model output — treat as untrusted. Strip comment
-        // closers, HTML/control characters and path traversal before use in the
-        // file tree, preview HTML and ZIP download.
-        let filename = match[2]
-          ?.replace(/\s*(-->|\*\/)\s*$/, '')
-          .replace(/[<>"'`\\\u0000-\u001f]/g, '')
-          .split('/')
-          .map(seg => seg.trim())
-          .filter(seg => seg && seg !== '.' && seg !== '..')
-          .join('/')
-          .slice(0, 200);
+        // Filenames come from model output — treat as untrusted (see lib/files.ts).
+        let filename = sanitizeFilename(match[2]);
         if (!filename) {
           fileCount++;
           filename = `snippet_${fileCount}.${lang}`;
@@ -877,7 +881,7 @@ function AppContent() {
     const promptToUse = promptOverride ?? homePrompt;
     if (!user || (!promptToUse.trim() && attachments.length === 0)) return;
     const newProject: Omit<Project, 'id'> = {
-      name: 'Custom Framework',
+      name: titleFromPrompt(promptToUse, 'Custom Framework'),
       description: 'Custom testing framework based on user prompt',
       prompt: promptToUse + (attachments.length > 0 ? `\n[Attached ${attachments.length} file(s)]` : ''),
       createdAt: Date.now(),
@@ -1679,6 +1683,50 @@ function AppContent() {
   // Show Excel/PPT/PDF download buttons when any .md files exist in current output
   const hasMdFiles = fileNames.length > 0 && fileNames.every(k => k.toLowerCase().endsWith('.md'));
 
+  // ── Command palette (Ctrl/⌘ + K) ───────────────────────────────────────────
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen(o => !o);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const openFileInCodePanel = (path: string) => {
+    if (!parsedFiles[path]) {
+      toast('That file is not in the current code view', 'info');
+      return;
+    }
+    setSelectedFile(path);
+    setRightPaneMode('code');
+    setMobilePane('workspace');
+  };
+
+  const commands: Command[] = [
+    { id: 'new', group: 'Actions', label: 'New project', icon: Plus, run: () => { setActiveProject(null); setSelectedTemplate(null); } },
+    { id: 'settings', group: 'Actions', label: 'Open run settings', icon: Settings2, keywords: 'model provider temperature', run: () => setIsSettingsOpen(true) },
+    { id: 'theme-dark', group: 'Actions', label: 'Switch to dark theme', icon: Moon, run: () => setTheme('dark') },
+    { id: 'theme-light', group: 'Actions', label: 'Switch to light theme', icon: Sun, run: () => setTheme('light') },
+    { id: 'sidebar', group: 'Actions', label: isLeftPanelOpen ? 'Hide sidebar' : 'Show sidebar', icon: PanelLeftOpen, run: () => setIsLeftPanelOpen(v => !v) },
+    ...(activeProject && messages.length > 0 ? [
+      { id: 'download', group: 'This project', label: 'Download code as ZIP', icon: Download, run: () => { handleDownloadFramework(); } },
+      { id: 'view-code', group: 'This project', label: 'Show code', icon: Code2, run: () => setRightPaneMode('code') },
+      { id: 'view-preview', group: 'This project', label: 'Show preview', icon: Eye, run: () => setRightPaneMode('preview') },
+      ...fileNames.map(f => ({ id: `file:${f}`, group: 'Files', label: f, icon: FileCode, run: () => openFileInCodePanel(f) })),
+    ] as Command[] : []),
+    ...projects.map(p => ({ id: `project:${p.id}`, group: 'Projects', label: p.name, hint: relativeTime(p.updatedAt), icon: History, keywords: p.description, run: () => setActiveProject(p) })),
+    ...TEMPLATES.map(t => ({ id: `template:${t.id}`, group: 'Templates', label: t.name, icon: IconMap[t.icon], keywords: t.description, run: () => { setActiveProject(null); setSelectedTemplate(t); } })),
+  ];
+
+  const isPlaybookProject = !!activeProject?.subTemplateId &&
+    TEMPLATES.some(t => t.subTemplates.some(st => st.id === activeProject.subTemplateId && st.type === 'playbook'));
+  const visibleProjects = projectQuery.trim()
+    ? projects.filter(p => p.name.toLowerCase().includes(projectQuery.trim().toLowerCase()))
+    : (historyExpanded ? projects : projects.slice(0, 6));
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen qa-canvas">
@@ -1740,6 +1788,8 @@ function AppContent() {
 
   return (
     <div className="flex h-screen qa-canvas text-gray-100 overflow-hidden font-sans">
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
+      <Toaster />
       {/* Desktop Sidebar */}
       <aside className={`hidden flex-col w-72 border-r border-[var(--qa-hairline)] qa-glass shrink-0 ${isLeftPanelOpen ? 'md:flex' : ''}`}>
         <div className="p-4 flex items-center justify-between">
@@ -1770,12 +1820,38 @@ function AppContent() {
             <Plus className="w-4 h-4" />
             New Project
           </Button>
+          <button
+            onClick={() => setPaletteOpen(true)}
+            className="mt-2 w-full h-9 px-3 flex items-center gap-2 rounded-xl text-sm text-gray-500 hover:text-gray-200 hover:bg-gray-800/60 transition-colors"
+          >
+            <Search className="w-4 h-4" />
+            <span className="flex-1 text-left">Search</span>
+            <kbd className="qa-kbd">Ctrl K</kbd>
+          </button>
         </div>
 
         <ScrollArea className="flex-1 px-4">
           <div className="space-y-1 py-2">
-            <div className="text-xs font-medium text-gray-500 mb-2 px-3">Recent</div>
-            {(historyExpanded ? projects : projects.slice(0, 3)).map((p) => (
+            <div className="text-xs font-medium text-gray-500 mb-2 px-3 flex items-center justify-between">
+              <span>Recent</span>
+              {projects.length > 0 && <span className="tabular-nums text-gray-600">{projects.length}</span>}
+            </div>
+            {projects.length > 6 && (
+              <div className="relative mb-2">
+                <Search className="w-3.5 h-3.5 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  value={projectQuery}
+                  onChange={e => setProjectQuery(e.target.value)}
+                  placeholder="Filter projects"
+                  aria-label="Filter projects"
+                  className="w-full h-8 pl-8 pr-3 rounded-lg bg-gray-800/50 border border-transparent focus:border-blue-500/50 text-sm text-gray-200 placeholder:text-gray-500 outline-none transition-colors"
+                />
+              </div>
+            )}
+            {visibleProjects.length === 0 && projectQuery.trim() && (
+              <p className="px-3 py-2 text-xs text-gray-500">No projects match.</p>
+            )}
+            {visibleProjects.map((p) => (
               <div key={p.id} className="flex items-center group justify-between">
                 {renamingProjectId === p.id ? (
                   <div className="flex items-center flex-1 min-w-0 gap-1 px-2 py-1">
@@ -1805,8 +1881,9 @@ function AppContent() {
                         activeProject?.id === p.id ? 'bg-gray-800/80 text-white font-medium' : 'hover:bg-gray-800/60 text-gray-400'
                       }`}
                     >
-                      <History className="w-4 h-4 flex-shrink-0" />
-                      <span className="truncate">{p.name}</span>
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 transition-colors ${activeProject?.id === p.id ? 'bg-blue-400' : 'bg-gray-600'}`} />
+                      <span className="truncate flex-1">{p.name}</span>
+                      <span className="text-[0.65rem] text-gray-600 shrink-0 group-hover:hidden">{relativeTime(p.updatedAt)}</span>
                     </button>
                     <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
@@ -1828,7 +1905,7 @@ function AppContent() {
                 )}
               </div>
             ))}
-            {projects.length > 3 && (
+            {projects.length > 6 && !projectQuery.trim() && (
               <button
                 onClick={() => setHistoryExpanded(prev => !prev)}
                 className="w-full flex items-center justify-center gap-1.5 mt-1 px-3 py-1.5 text-xs text-gray-500 hover:text-gray-300 hover:bg-gray-800/60 rounded-lg transition-colors"
@@ -1836,7 +1913,7 @@ function AppContent() {
                 {historyExpanded ? (
                   <><ChevronUp className="w-3.5 h-3.5" /> Show less</>
                 ) : (
-                  <><ChevronDown className="w-3.5 h-3.5" /> {projects.length - 3} more projects</>
+                  <><ChevronDown className="w-3.5 h-3.5" /> {projects.length - 6} more projects</>
                 )}
               </button>
             )}
@@ -2080,7 +2157,7 @@ function AppContent() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 w-full mt-6">
+                  <div key={String(activeCollection)} className="qa-stagger grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 w-full mt-6">
                     {TEMPLATES.filter((t) => activeCollection === null || t.collection === activeCollection).map((t) => {
                       const Icon = IconMap[t.icon];
                       return (
@@ -2303,7 +2380,7 @@ function AppContent() {
         ) : (
           <>
             {/* Project Header */}
-            <header className="h-16 border-b border-gray-800/60 flex items-center justify-between px-4 bg-[var(--qa-surface)]/80 backdrop-blur-xl sticky top-0 z-20 shrink-0 min-w-0">
+            <header className="h-14 border-b border-[var(--qa-hairline)] flex items-center justify-between px-4 qa-glass sticky top-0 z-20 shrink-0 min-w-0">
               <div className="flex items-center gap-2 min-w-0">
                 {!isLeftPanelOpen && (
                   <button
@@ -2314,59 +2391,58 @@ function AppContent() {
                     <PanelLeftOpen className="w-4 h-4" />
                   </button>
                 )}
-                <h2 className="font-bold text-lg truncate tracking-tight">{activeProject.name}</h2>
-                <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20 shrink-0">
+                <h2 className="font-semibold text-[0.95rem] truncate tracking-tight">{activeProject.name}</h2>
+                <Badge variant="outline" className="bg-transparent text-gray-500 border-[var(--qa-hairline)] text-[0.65rem] tracking-wider rounded-full shrink-0">
                   {activeProject.templateId ? TEMPLATES.find(t => t.id === activeProject.templateId)?.category.toUpperCase() : 'CUSTOM'}
                 </Badge>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <Button
-                  variant="outline"
                   size="sm"
-                  className="bg-transparent border-gray-700 hover:bg-gray-800 gap-2"
+                  className="qa-primary rounded-full px-4 gap-2"
                   onClick={handleDownloadFramework}
                   disabled={isDownloading || messages.length === 0}
                 >
                   {isDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                  Download Code
+                  Download
                 </Button>
                 {hasMdFiles && (
                   <Button
                     variant="outline"
                     size="sm"
-                    className="bg-transparent border-amber-700/50 hover:bg-amber-900/20 text-amber-400 gap-2"
+                    className="bg-transparent border-[var(--qa-hairline)] hover:bg-gray-800 text-gray-300 rounded-full gap-2"
                     onClick={handleDownloadExcel}
                     disabled={messages.length === 0}
                   >
                     <FileSpreadsheet className="w-4 h-4" />
-                    Download Excel
+                    Excel
                   </Button>
                 )}
                 {hasMdFiles && (
                   <Button
                     variant="outline"
                     size="sm"
-                    className="bg-transparent border-orange-700/50 hover:bg-orange-900/20 text-orange-400 gap-2"
+                    className="bg-transparent border-[var(--qa-hairline)] hover:bg-gray-800 text-gray-300 rounded-full gap-2"
                     onClick={handleDownloadPptx}
                     disabled={messages.length === 0}
                   >
                     <Layers className="w-4 h-4" />
-                    Download PPT
+                    PowerPoint
                   </Button>
                 )}
                 {hasMdFiles && (
                   <Button
                     variant="outline"
                     size="sm"
-                    className="bg-transparent border-red-700/50 hover:bg-red-900/20 text-red-400 gap-2"
+                    className="bg-transparent border-[var(--qa-hairline)] hover:bg-gray-800 text-gray-300 rounded-full gap-2"
                     onClick={handleDownloadPdf}
                     disabled={messages.length === 0}
                   >
                     <FileDown className="w-4 h-4" />
-                    Download PDF
+                    PDF
                   </Button>
                 )}
-                <Button variant="outline" size="sm" className="bg-transparent border-gray-700 hover:bg-gray-800 gap-2">
+                <Button variant="outline" size="sm" className="max-md:hidden bg-transparent border-[var(--qa-hairline)] hover:bg-gray-800 text-gray-300 rounded-full gap-2">
                   <Github className="w-4 h-4" />
                   Deploy to GitHub
                 </Button>
@@ -2382,15 +2458,34 @@ function AppContent() {
               </div>
             </header>
 
+            {messages.length > 0 && (
+              <div className="md:hidden flex justify-center py-2 shrink-0">
+                <div className="qa-segment" role="group" aria-label="Switch pane">
+                  <button onClick={() => setMobilePane('chat')} aria-pressed={mobilePane === 'chat'} className="flex items-center gap-1.5">
+                    <MessageSquare className="w-3.5 h-3.5" /> Chat
+                  </button>
+                  <button onClick={() => setMobilePane('workspace')} aria-pressed={mobilePane === 'workspace'} className="flex items-center gap-1.5">
+                    <Code2 className="w-3.5 h-3.5" /> Results
+                  </button>
+                </div>
+              </div>
+            )}
             <ResizablePanelGroup orientation="horizontal" className="flex-1 overflow-hidden relative">
               {/* Chat Area */}
-              <ResizablePanel defaultSize={messages.length > 0 ? 50 : 100} minSize={30} className="flex flex-col relative">
-                <div className="flex-1 overflow-y-auto p-6 pb-40" ref={scrollRef}>
-                  <div className="max-w-4xl mx-auto space-y-8">
+              <ResizablePanel defaultSize={messages.length > 0 ? 50 : 100} minSize={30} className={`flex flex-col relative ${messages.length > 0 && mobilePane === 'workspace' ? 'qa-pane-hidden' : ''}`}>
+                <div
+                  className="flex-1 overflow-y-auto px-4 md:px-6 pt-6 pb-48"
+                  ref={scrollRef}
+                  onScroll={(e) => {
+                    const el = e.currentTarget;
+                    setShowJumpToLatest(el.scrollHeight - el.scrollTop - el.clientHeight > 320);
+                  }}
+                >
+                  <div className="max-w-3xl mx-auto space-y-6">
                     {messages.length === 0 && (
                       <div className="flex flex-col items-center justify-center py-20 text-center space-y-4">
-                        <div className="w-16 h-16 bg-gradient-to-br from-blue-600/20 to-violet-600/20 rounded-full flex items-center justify-center border border-blue-500/20">
-                          <Play className="w-8 h-8 text-blue-500" />
+                        <div className="qa-logo w-14 h-14 rounded-[1.2rem] flex items-center justify-center">
+                          <Sparkles className="w-7 h-7 text-white" />
                         </div>
                         <div className="space-y-2">
                           <h3 className="text-xl font-semibold">Ready to build</h3>
@@ -2400,84 +2495,24 @@ function AppContent() {
                     )}
                     {messages.map((m, idx) => {
                       const isLastAssistant = m.role === 'assistant' && messages.slice(idx + 1).every(mm => mm.role !== 'assistant');
-                      const isActiveCheckpoint = checkpointMsgId === m.id;
-                      const showCheckpointBtn = m.role === 'assistant' && !isLastAssistant;
                       return (
-                      <div key={m.id} className={`flex gap-4 ${m.role === 'assistant' ? `bg-[var(--qa-card)] p-6 rounded-2xl border border-gray-800 border-l-2 ${isActiveCheckpoint ? 'border-l-amber-500/70' : 'border-l-blue-500/30'}` : 'py-2'}`}>
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${m.role === 'assistant' ? 'bg-blue-600 shadow-md shadow-blue-500/25' : 'bg-gray-700'}`}>
-                          {m.role === 'assistant' ? <Layout className="w-5 h-5 text-white" /> : <UserIcon className="w-5 h-5 text-white" />}
-                        </div>
-                        <div className="flex-1 space-y-2 overflow-hidden">
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                              {m.role === 'assistant' ? 'QA Studio AI' : 'You'}
-                            </p>
-                            {showCheckpointBtn && (
-                              <button
-                                title={isActiveCheckpoint ? 'Return to latest code' : 'View code at this checkpoint'}
-                                onClick={() => setCheckpointMsgId(isActiveCheckpoint ? null : m.id)}
-                                className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[0.65rem] font-medium border transition-colors shrink-0 ${isActiveCheckpoint ? 'bg-amber-500/15 border-amber-500/50 text-amber-400 hover:bg-amber-500/25' : 'bg-[var(--qa-surface)] border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-500'}`}
-                              >
-                                {isActiveCheckpoint ? <RotateCcw className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
-                                {isActiveCheckpoint ? 'Active checkpoint' : 'Checkpoint'}
-                              </button>
-                            )}
-                          </div>
-                          <div className="prose prose-invert max-w-none text-gray-300 leading-relaxed break-words overflow-hidden" style={{fontSize:'0.8rem'}}>
-                            <ReactMarkdown
-                              components={{
-                                code({node, inline, className, children, ...props}: any) {
-                                  const match = /language-(\w+)/.exec(className || '');
-                                  const codeString = String(children).replace(/\n$/, '');
-                                  const filenameMatch = codeString.match(/^(?:\/\/|#)\s*filename:\s*([^\n]+)\n/);
-                                  
-                                  if (!inline && filenameMatch) {
-                                    const filename = filenameMatch[1].trim();
-                                    return (
-                                      <div className="rounded-xl overflow-hidden my-4 border border-gray-800 bg-[var(--qa-surface)] p-4 flex items-center gap-3">
-                                        <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center flex-shrink-0">
-                                          <FileCode className="w-5 h-5 text-blue-400" />
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                          <p className="text-sm font-medium text-gray-200 truncate">Generated: {filename}</p>
-                                          <p className="text-xs text-gray-500">View in Code panel</p>
-                                        </div>
-                                      </div>
-                                    );
-                                  }
-                                  
-                                  return !inline && match ? (
-                                    <div className="rounded-xl overflow-hidden my-4 border border-gray-800">
-                                      <div className="bg-[var(--qa-surface)] px-4 py-2 text-xs text-gray-500 flex justify-between items-center border-b border-gray-800">
-                                        <span>{match[1]}</span>
-                                      </div>
-                                      <div className="p-4 bg-[var(--qa-card)] overflow-x-auto">
-                                        <code className={className} {...props}>
-                                          {children}
-                                        </code>
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    <code className="bg-gray-800 px-1.5 py-0.5 rounded text-blue-300" style={{fontSize:'0.75rem'}} {...props}>
-                                      {children}
-                                    </code>
-                                  )
-                                }
-                              }}
-                            >
-                              {m.content}
-                            </ReactMarkdown>
-                          </div>
-                        </div>
-                      </div>
+                        <ChatMessage
+                          key={m.id}
+                          message={m}
+                          files={parsedFiles}
+                          onOpenFile={openFileInCodePanel}
+                          showCheckpoint={m.role === 'assistant' && !isLastAssistant}
+                          isActiveCheckpoint={checkpointMsgId === m.id}
+                          onToggleCheckpoint={() => setCheckpointMsgId(checkpointMsgId === m.id ? null : m.id)}
+                        />
                       );
                     })}
                     {/* Refinement questions — shown after first-turn response as radio-button cards */}
                     {!isGenerating && !refinementDismissed && refinementQuestions.length > 0 && (
-                      <div className="rounded-2xl border border-blue-500/25 bg-blue-500/5 p-5 space-y-5">
+                      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }} className="qa-panel p-5 space-y-5">
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <p className="text-sm font-semibold text-blue-300">🎯 Refine your framework</p>
+                            <p className="text-sm font-semibold text-gray-100 flex items-center gap-2"><Sparkles className="w-4 h-4 text-blue-400" /> Refine your result</p>
                             <p className="text-xs text-gray-400 mt-0.5">Answer a few quick questions to get a more tailored result. Skip any you don't need.</p>
                           </div>
                           <button onClick={() => { setRefinementDismissed(true); setRefinementQuestions([]); }} className="text-gray-500 hover:text-gray-300 text-xs shrink-0 mt-0.5">✕ Skip all</button>
@@ -2493,11 +2528,11 @@ function AppContent() {
                                     onClick={() => setRefinementAnswers(prev => ({ ...prev, [q.id]: opt }))}
                                     className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
                                       refinementAnswers[q.id] === opt
-                                        ? 'bg-blue-600 border-blue-500 text-white'
-                                        : 'bg-[var(--qa-surface)] border-gray-700 text-gray-300 hover:border-blue-500/50 hover:text-blue-200'
+                                        ? 'qa-primary border-transparent'
+                                        : 'bg-transparent border-[var(--qa-hairline)] text-gray-300 hover:border-blue-500/50'
                                     }`}
                                   >
-                                    {refinementAnswers[q.id] === opt ? '● ' : '○ '}{opt}
+                                    {opt}
                                   </button>
                                 ))}
                               </div>
@@ -2516,72 +2551,68 @@ function AppContent() {
                               setRefinementDismissed(true);
                               handleSendMessage(refinePrompt);
                             }}
-                            className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium transition-colors"
+                            className="qa-primary px-4 py-1.5 rounded-full disabled:cursor-not-allowed text-xs font-medium"
                           >
                             Apply & Regenerate
                           </button>
                           <button
                             onClick={() => { setRefinementDismissed(true); setRefinementQuestions([]); }}
-                            className="px-4 py-1.5 rounded-lg border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-500 text-xs font-medium transition-colors"
+                            className="px-4 py-1.5 rounded-full border border-[var(--qa-hairline)] text-gray-400 hover:text-gray-200 text-xs font-medium transition-colors"
                           >
                             Skip
                           </button>
                           <span className="text-xs text-gray-600">{Object.keys(refinementAnswers).length}/{refinementQuestions.length} answered</span>
                         </div>
-                      </div>
+                      </motion.div>
                     )}
                     {/* Suggestion chips - shown after last AI response, hidden while generating */}
                     {!isGenerating && suggestions.length > 0 && (
-                      <div className="flex flex-col gap-2 pt-1 pb-2">
-                        <p className="text-[0.7rem] font-semibold text-gray-500 uppercase tracking-wider px-1">Suggested next steps</p>
+                      <div className="flex flex-col gap-2.5 pt-1 pb-2">
+                        <p className="text-xs font-medium text-gray-500 px-1">Suggested next steps</p>
                         <div className="flex flex-wrap gap-2">
                           {suggestions.map((s, i) => (
-                            <button
-                              key={i}
+                            <motion.button
+                              key={s}
+                              initial={{ opacity: 0, y: 8 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ delay: 0.06 * i, duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
                               onClick={() => setInput(s)}
-                              className="text-[0.75rem] px-3 py-1.5 rounded-full border border-blue-500/30 bg-blue-500/5 text-blue-300 hover:bg-blue-500/15 hover:border-blue-400/60 transition-colors text-left"
+                              className="qa-chip text-left"
                             >
                               {s}
-                            </button>
+                            </motion.button>
                           ))}
                         </div>
                       </div>
                     )}
                     {isGenerating && (
-                      <div className="flex gap-4 bg-[var(--qa-card)] p-6 rounded-2xl border border-gray-800 animate-pulse">
-                        <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center flex-shrink-0">
-                          <Loader2 className="w-5 h-5 text-white animate-spin" />
-                        </div>
-                        <div className="flex-1 space-y-4">
-                          <div className="h-4 bg-gray-800 rounded w-1/4"></div>
-                          <div className="space-y-2">
-                            <div className="h-4 bg-gray-800 rounded w-full"></div>
-                            <div className="h-4 bg-gray-800 rounded w-5/6"></div>
-                            <div className="h-4 bg-gray-800 rounded w-4/6"></div>
-                          </div>
-                        </div>
-                        <button
-                          onClick={handleStopGeneration}
-                          className="self-start flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600/10 border border-red-500/30 text-red-400 hover:bg-red-600/20 hover:border-red-400/60 text-xs font-medium transition-colors shrink-0"
-                          title="Stop generation and revert"
-                        >
-                          <StopCircle className="w-3.5 h-3.5" />
-                          Stop
-                        </button>
-                      </div>
+                      <GenerationProgress onStop={handleStopGeneration} playbook={isPlaybookProject} />
                     )}
                   </div>
                 </div>
 
+                {/* Jump to latest */}
+                <AnimatePresence>
+                  {showJumpToLatest && (
+                    <motion.button
+                      initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }}
+                      onClick={() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })}
+                      className="qa-glass absolute bottom-44 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 h-8 px-3 rounded-full border border-[var(--qa-hairline)] text-xs text-gray-300 hover:text-white shadow-lg"
+                    >
+                      <ArrowDown className="w-3.5 h-3.5" /> Latest
+                    </motion.button>
+                  )}
+                </AnimatePresence>
+
                 {/* Input Area */}
-                <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-[var(--qa-bg)] via-[var(--qa-bg)] to-transparent">
-                  <div className="max-w-4xl mx-auto relative">
+                <div className="absolute bottom-0 left-0 right-0 px-4 md:px-6 pb-4 pt-10 qa-composer-fade pointer-events-none">
+                  <div className="max-w-3xl mx-auto relative pointer-events-auto">
                     {attachments.length > 0 && (
-                      <div className="absolute bottom-full left-0 mb-2 flex flex-wrap gap-2 p-2 bg-[var(--qa-card-alt)] border border-gray-800 rounded-xl w-full">
+                      <div className="absolute bottom-full left-0 mb-2 flex flex-wrap gap-2 p-2 qa-glass border border-[var(--qa-hairline)] rounded-2xl w-full">
                         {attachments.map((file, index) => (
-                          <div key={index} className="flex items-center gap-2 bg-gray-800 px-3 py-1.5 rounded-lg text-sm">
+                          <div key={index} className="flex items-center gap-2 bg-gray-800 px-3 py-1.5 rounded-full text-sm">
                             <span className="truncate max-w-[150px] text-gray-200">{file.name}</span>
-                            <button onClick={() => removeAttachment(index)} className="text-gray-400 hover:text-white">
+                            <button onClick={() => removeAttachment(index)} className="text-gray-400 hover:text-white" aria-label={`Remove ${file.name}`}>
                               <X className="w-4 h-4" />
                             </button>
                           </div>
@@ -2595,61 +2626,71 @@ function AppContent() {
                       multiple 
                       onChange={handleFileSelect} 
                     />
-                    <Textarea
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      onPaste={handlePaste}
-                      placeholder="Ask for specific testing requirements (e.g., 'Add API validation for the user profile endpoint')"
-                      className="w-full bg-[var(--qa-card-alt)] border-gray-800 focus-visible:border-blue-500/60 focus-visible:ring-2 focus-visible:ring-blue-500/15 min-h-[100px] pr-28 py-4 rounded-2xl resize-none text-gray-200 placeholder:text-gray-600 text-[0.8rem] placeholder:text-[0.8rem]"
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          handleSendMessage(input);
-                        }
-                      }}
-                    />
-                    <div className="absolute bottom-4 right-4 flex items-center gap-2">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger render={<Button variant="ghost" size="icon" className="text-gray-400 hover:text-white hover:bg-gray-800 rounded-xl">
-                            <Plus className="w-5 h-5" />
-                          </Button>}>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-48 bg-[var(--qa-card-alt)] border-gray-800 text-gray-200">
-                          <DropdownMenuItem className="gap-2 cursor-pointer hover:bg-gray-800 focus:bg-gray-800" onClick={() => fileInputRef.current?.click()}>
-                            <HardDrive className="w-4 h-4" /> Drive
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="gap-2 cursor-pointer hover:bg-gray-800 focus:bg-gray-800" onClick={() => fileInputRef.current?.click()}>
-                            <Upload className="w-4 h-4" /> Upload Files
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="gap-2 cursor-pointer hover:bg-gray-800 focus:bg-gray-800" onClick={() => fileInputRef.current?.click()}>
-                            <Camera className="w-4 h-4" /> Camera
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={!input.trim() || isGenerating}
-                        onClick={openChatEnhancer}
-                        className="text-purple-400 hover:text-purple-300 hover:bg-purple-500/10 rounded-xl px-2.5 gap-1.5 text-xs font-medium disabled:opacity-30"
-                      >
-                        <Sparkles className="w-3.5 h-3.5" />
-                        Enhance
-                      </Button>
-                      <Button 
-                        size="icon" 
-                        className={isGenerating
-                          ? "bg-red-600 hover:bg-red-500 rounded-xl shadow-sm shadow-red-500/30"
-                          : "bg-blue-600 hover:bg-blue-500 rounded-xl shadow-sm shadow-blue-500/30"
-                        }
-                        disabled={!isGenerating && (!input.trim() && attachments.length === 0)}
-                        onClick={isGenerating ? handleStopGeneration : () => handleSendMessage(input)}
-                      >
-                        {isGenerating ? <StopCircle className="w-5 h-5" /> : <Send className="w-5 h-5" />}
-                      </Button>
+                    <div className="qa-composer qa-composer--chat p-2">
+                      <Textarea
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onPaste={handlePaste}
+                        placeholder={messages.length > 0 ? 'Ask for a change, e.g. “Add API validation for the user profile endpoint”' : 'Describe what you want to build…'}
+                        className="w-full bg-transparent dark:bg-transparent border-none shadow-none focus-visible:ring-0 min-h-[56px] max-h-48 px-3 py-2.5 resize-none text-gray-200 placeholder:text-gray-500 text-[0.95rem]"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            handleSendMessage(input);
+                          }
+                        }}
+                      />
+                      <div className="flex items-center justify-between gap-2 px-1 pt-1">
+                        <div className="flex items-center gap-1">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger render={<Button variant="ghost" size="icon" title="Attach files" className="text-gray-400 hover:text-white hover:bg-gray-800 rounded-full w-9 h-9">
+                                <Plus className="w-4 h-4" />
+                              </Button>}>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start" className="w-48 bg-[var(--qa-card-alt)] border-gray-800 text-gray-200">
+                              <DropdownMenuItem className="gap-2 cursor-pointer hover:bg-gray-800 focus:bg-gray-800" onClick={() => fileInputRef.current?.click()}>
+                                <HardDrive className="w-4 h-4" /> Drive
+                              </DropdownMenuItem>
+                              <DropdownMenuItem className="gap-2 cursor-pointer hover:bg-gray-800 focus:bg-gray-800" onClick={() => fileInputRef.current?.click()}>
+                                <Upload className="w-4 h-4" /> Upload Files
+                              </DropdownMenuItem>
+                              <DropdownMenuItem className="gap-2 cursor-pointer hover:bg-gray-800 focus:bg-gray-800" onClick={() => fileInputRef.current?.click()}>
+                                <Camera className="w-4 h-4" /> Camera
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={!input.trim() || isGenerating}
+                            onClick={openChatEnhancer}
+                            className="text-[var(--qa-accent-2)] hover:bg-[var(--qa-card-alt)] rounded-full px-3 h-9 gap-1.5 text-xs font-medium disabled:opacity-40"
+                          >
+                            <Sparkles className="w-3.5 h-3.5" />
+                            Enhance
+                          </Button>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="hidden lg:inline text-[0.68rem] text-gray-600">
+                            <kbd className="qa-kbd">Enter</kbd> to send · <kbd className="qa-kbd">Shift Enter</kbd> for a new line
+                          </span>
+                          <Button 
+                            size="icon" 
+                            aria-label={isGenerating ? 'Stop generation' : 'Send message'}
+                            className={isGenerating
+                              ? "bg-red-600 hover:bg-red-500 text-white rounded-full w-9 h-9"
+                              : "qa-primary rounded-full w-9 h-9"
+                            }
+                            disabled={!isGenerating && (!input.trim() && attachments.length === 0)}
+                            onClick={isGenerating ? handleStopGeneration : () => handleSendMessage(input)}
+                          >
+                            {isGenerating ? <StopCircle className="w-4 h-4" /> : <Send className="w-4 h-4" />}
+                          </Button>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  <p className="text-center text-[10px] text-gray-600 mt-3">
+                  <p className="text-center text-[10px] text-gray-600 mt-2.5 pointer-events-auto">
                     QA Studio AI can make mistakes. Verify critical test code before deployment.
                   </p>
                 </div>
@@ -2658,23 +2699,25 @@ function AppContent() {
               {/* Right Pane */}
               {messages.length > 0 && (
                 <>
-                  <ResizableHandle withHandle className="bg-gray-800" />
-                  <ResizablePanel defaultSize={50} minSize={30} className="flex flex-col bg-[var(--qa-surface)]">
+                  <ResizableHandle withHandle className="bg-transparent w-1.5 max-md:hidden" />
+                  <ResizablePanel defaultSize={50} minSize={30} className={`p-3 md:pl-1 ${mobilePane === 'chat' ? 'qa-pane-hidden' : ''}`}>
+                   <div className="qa-workspace h-full flex flex-col overflow-hidden">
                     {/* Toggle Header */}
-                    <div className="h-14 border-b border-gray-800 flex items-center justify-between px-4 bg-[var(--qa-bg)] shrink-0">
-                      <div className="flex items-center bg-[var(--qa-card)] p-1 rounded-lg border border-gray-800">
-                        <button
-                          onClick={() => setRightPaneMode('preview')}
-                          className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${rightPaneMode === 'preview' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
-                        >
-                          Preview
-                        </button>
-                        <button
-                          onClick={() => setRightPaneMode('code')}
-                          className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${rightPaneMode === 'code' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
-                        >
-                          Code
-                        </button>
+                    <div className="h-14 border-b border-[var(--qa-hairline)] flex items-center justify-between px-3 shrink-0">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="qa-segment" role="group" aria-label="Workspace view">
+                          <button onClick={() => setRightPaneMode('preview')} aria-pressed={rightPaneMode === 'preview'} className="flex items-center gap-1.5">
+                            <Eye className="w-3.5 h-3.5" /> Preview
+                          </button>
+                          <button onClick={() => setRightPaneMode('code')} aria-pressed={rightPaneMode === 'code'} className="flex items-center gap-1.5">
+                            <Code2 className="w-3.5 h-3.5" /> Code
+                          </button>
+                        </div>
+                        {fileNames.length > 0 && (
+                          <span className="hidden xl:inline text-xs text-gray-500 tabular-nums truncate">
+                            {fileNames.length} file{fileNames.length === 1 ? '' : 's'} · {fileNames.reduce((n, k) => n + parsedFiles[k].content.split('\n').length, 0).toLocaleString()} lines
+                          </span>
+                        )}
                       </div>
                       {/* Viewport controls - only shown in preview mode */}
                       {rightPaneMode === 'preview' && htmlPreviewFile && (
@@ -2731,12 +2774,12 @@ function AppContent() {
                     )}
 
                   {rightPaneMode === 'code' ? (
-                    <div className="flex-1 flex min-h-0">
+                    <div className="flex-1 flex min-h-0 max-md:flex-col">
                       {fileNames.length > 0 ? (
                         <>
-                          <div className="w-1/3 min-w-[140px] max-w-[256px] border-r border-gray-800 bg-[var(--qa-bg)] flex flex-col shrink-0">
-                            <div className="p-3 border-b border-gray-800 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                              Explorer
+                          <div className="w-1/3 min-w-[150px] max-w-[240px] border-r border-[var(--qa-hairline)] flex flex-col shrink-0 min-h-0 overflow-hidden max-md:w-full max-md:max-w-none max-md:h-44 max-md:border-r-0 max-md:border-b">
+                            <div className="h-12 px-4 flex items-center border-b border-[var(--qa-hairline)] text-xs font-medium text-gray-500 shrink-0">
+                              Files
                             </div>
                             <ScrollArea className="flex-1 py-2">
                               <FileTree 
@@ -2746,49 +2789,25 @@ function AppContent() {
                               />
                             </ScrollArea>
                           </div>
-                          <div className="flex-1 overflow-auto p-6 bg-[var(--qa-bg)] flex flex-col">
-                            {selectedFile && parsedFiles[selectedFile] ? (
-                              <>
-                                <div className="flex items-center justify-between mb-4 pb-4 border-b border-gray-800 shrink-0 min-w-0 gap-4">
-                                  <div className="flex items-center gap-2 text-gray-300 min-w-0">
-                                    <FileCode className="w-5 h-5 text-blue-400 shrink-0" />
-                                    <span className="font-medium truncate">{selectedFile}</span>
-                                  </div>
-                                  <Button 
-                                    variant="outline" 
-                                    size="sm" 
-                                    className="bg-[var(--qa-card)] border-gray-800 text-gray-300 hover:text-white gap-2 shrink-0"
-                                    onClick={() => {
-                                      const blob = new Blob([parsedFiles[selectedFile].content], { type: 'text/plain;charset=utf-8' });
-                                      saveAs(blob, selectedFile.split('/').pop() || 'file.txt');
-                                    }}
-                                  >
-                                    <Download className="w-4 h-4" />
-                                    Download File
-                                  </Button>
-                                </div>
-                                <div className="prose prose-invert max-w-none flex-1 overflow-auto">
-                                  <ReactMarkdown
-                                    components={{
-                                      pre: ({ node, ...props }) => <pre className="p-4 bg-[var(--qa-card)] rounded-xl border border-gray-800 overflow-auto text-sm font-mono m-0" {...props} />,
-                                      code: ({ node, inline, className, children, ...props }: any) => {
-                                        return <code className={className} {...props}>{children}</code>;
-                                      }
-                                    }}
-                                  >
-                                    {`\`\`\`${parsedFiles[selectedFile].language}\n${parsedFiles[selectedFile].content}\n\`\`\``}
-                                  </ReactMarkdown>
-                                </div>
-                              </>
-                            ) : (
-                              <div className="h-full flex items-center justify-center text-gray-500">
-                                <div className="text-center space-y-4">
-                                  <FileCode className="w-12 h-12 mx-auto text-gray-700" />
-                                  <p>Select a file to view its contents.</p>
-                                </div>
+                          {selectedFile && parsedFiles[selectedFile] ? (
+                            <CodeViewer
+                              key={selectedFile}
+                              filename={selectedFile}
+                              language={parsedFiles[selectedFile].language}
+                              content={parsedFiles[selectedFile].content}
+                              onDownload={() => {
+                                const blob = new Blob([parsedFiles[selectedFile].content], { type: 'text/plain;charset=utf-8' });
+                                saveAs(blob, selectedFile.split('/').pop() || 'file.txt');
+                              }}
+                            />
+                          ) : (
+                            <div className="flex-1 flex items-center justify-center text-gray-500">
+                              <div className="text-center space-y-3">
+                                <FileCode className="w-10 h-10 mx-auto text-gray-700" />
+                                <p className="text-sm">Select a file to view its contents.</p>
                               </div>
-                            )}
-                          </div>
+                            </div>
+                          )}
                         </>
                       ) : (
                         <div className="flex-1 flex items-center justify-center text-gray-500">
@@ -2800,11 +2819,11 @@ function AppContent() {
                       )}
                     </div>
                   ) : (
-                    <div className="flex-1 flex flex-col bg-[var(--qa-card-alt)] overflow-hidden">
+                    <div className="flex-1 flex flex-col overflow-hidden">
                       {htmlPreviewFile ? (
                         <div className="flex-1 flex items-start justify-center overflow-auto p-4">
                           <div
-                            className="bg-white shadow-2xl rounded-lg overflow-hidden transition-all duration-300 h-full"
+                            className="bg-white shadow-2xl rounded-2xl overflow-hidden transition-all duration-300 h-full"
                             style={{
                               width: previewViewport === 'mobile' ? '390px' : previewViewport === 'tablet' ? '768px' : '100%',
                               minHeight: '100%',
@@ -2823,7 +2842,7 @@ function AppContent() {
                       ) : (
                         <div className="flex-1 flex items-start justify-center overflow-auto p-4">
                           <div
-                            className="bg-white shadow-2xl rounded-lg overflow-hidden transition-all duration-300 h-full"
+                            className="bg-white shadow-2xl rounded-2xl overflow-hidden transition-all duration-300 h-full"
                             style={{
                               width: previewViewport === 'mobile' ? '390px' : previewViewport === 'tablet' ? '768px' : '100%',
                               minHeight: '100%',
@@ -2842,6 +2861,7 @@ function AppContent() {
                       )}
                     </div>
                   )}
+                   </div>
                   </ResizablePanel>
                 </>
               )}

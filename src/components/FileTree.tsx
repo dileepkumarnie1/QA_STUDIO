@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Folder, FolderOpen, FileCode, ChevronRight, ChevronDown } from 'lucide-react';
+import { Folder, FolderOpen, ChevronRight, ChevronDown } from 'lucide-react';
+import { fileColor } from '../lib/files';
 
 type FileNode = {
   name: string;
@@ -48,8 +49,10 @@ interface FileTreeProps {
 export function FileTree({ tree, selectedFile, onSelectFile, level = 0 }: FileTreeProps) {
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
 
+  // Folders start expanded so the whole project is visible at a glance.
+  const isOpen = (path: string) => expandedFolders[path] ?? true;
   const toggleFolder = (path: string) => {
-    setExpandedFolders(prev => ({ ...prev, [path]: !prev[path] }));
+    setExpandedFolders(prev => ({ ...prev, [path]: !(prev[path] ?? true) }));
   };
 
   const nodes = Object.values(tree).sort((a, b) => {
@@ -62,8 +65,8 @@ export function FileTree({ tree, selectedFile, onSelectFile, level = 0 }: FileTr
       {nodes.map(node => (
         <div key={node.path}>
           <div
-            className={`flex items-center gap-1.5 py-1 px-2 cursor-pointer hover:bg-gray-800/50 text-sm transition-colors min-w-0 ${
-              selectedFile === node.path ? 'bg-blue-600/10 text-blue-400' : 'text-gray-300'
+            className={`flex items-center gap-1.5 py-1 px-2 mx-1.5 rounded-lg cursor-pointer hover:bg-gray-800/60 text-[0.8rem] transition-colors min-w-0 ${
+              selectedFile === node.path ? 'bg-blue-500/15 text-gray-100 font-medium' : 'text-gray-400'
             }`}
             style={{ paddingLeft: `${level * 12 + 8}px` }}
             onClick={() => {
@@ -76,18 +79,18 @@ export function FileTree({ tree, selectedFile, onSelectFile, level = 0 }: FileTr
           >
             {node.type === 'folder' ? (
               <>
-                {expandedFolders[node.path] ? <ChevronDown className="w-3.5 h-3.5 text-gray-500" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-500" />}
-                {expandedFolders[node.path] ? <FolderOpen className="w-4 h-4 text-blue-400" /> : <Folder className="w-4 h-4 text-blue-400" />}
+                {isOpen(node.path) ? <ChevronDown className="w-3.5 h-3.5 text-gray-500" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-500" />}
+                {isOpen(node.path) ? <FolderOpen className="w-4 h-4 text-gray-500" /> : <Folder className="w-4 h-4 text-gray-500" />}
               </>
             ) : (
               <>
                 <span className="w-3.5 h-3.5" /> {/* Spacer for alignment */}
-                <FileCode className="w-4 h-4 text-gray-400" />
+                <span className="w-4 h-4 flex items-center justify-center shrink-0"><span className="w-2 h-2 rounded-full" style={{ background: fileColor(node.path) }} /></span>
               </>
             )}
             <span className="truncate flex-1 min-w-0">{node.name}</span>
           </div>
-          {node.type === 'folder' && expandedFolders[node.path] && node.children && (
+          {node.type === 'folder' && isOpen(node.path) && node.children && (
             <FileTree
               tree={node.children}
               selectedFile={selectedFile}
