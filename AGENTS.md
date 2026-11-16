@@ -138,9 +138,16 @@ qa-studio/
 │   ├── vite-env.d.ts      # ImportMetaEnv typings for VITE_FIREBASE_* vars
 │   ├── components/
 │   │   ├── ErrorBoundary.tsx
+│   │   ├── ChatMessage.tsx      # Chat bubbles, file chips, highlighted code blocks
+│   │   ├── CodeViewer.tsx       # Highlighted file viewer with line numbers
+│   │   ├── CommandPalette.tsx   # Ctrl/⌘+K palette
+│   │   ├── GenerationProgress.tsx # Animated generating state
+│   │   ├── Toaster.tsx          # toast() / copyText()
 │   │   └── FileTree.tsx   # Recursive file tree for code explorer panel
 │   ├── lib/
 │   │   ├── AuthContext.tsx # Firebase Auth provider + saveUserProfile + email allowlist
+│   │   ├── files.ts       # sanitizeFilename, titleFromPrompt, fileColor, relativeTime
+│   │   ├── highlight.ts   # highlight.js setup (registered languages only)
 │   │   ├── db.ts          # All Firestore operations (no PII in thrown errors)
 │   │   ├── firebase.ts    # Firebase app init, exports `auth` + `db`
 │   │   └── gemini.ts      # Client AI interface — proxies Google to /api/generate
@@ -476,12 +483,25 @@ projects/{projectId}/messages/{messageId}
 - Removed unused `xlsx` dependency (unpatched advisories) and ran `npm audit fix` (45 → 17 advisories, remainder are transitive in `firebase-admin`/build tooling).
 - **Visual refresh (presentation only):** new tokens and a `qa-*` utility layer at the end of `src/index.css` (`qa-canvas`, `qa-glass`, `qa-composer`, `qa-primary`, `qa-segment`, `qa-headline`, `qa-logo`); neutral grey scale and single accent blue defined in `@theme`; system font stack with Geist fallback. Redesigned sign-in screen, home hero, prompt composer and collection filter. Removed placeholder controls that had no handlers (Tools, Mic, second attach menu) from the home composer.
 
+### Session 19 — Workspace Experience Overhaul
+- **Conversation** (`src/components/ChatMessage.tsx`): user prompts are right-aligned bubbles that collapse when long; assistant replies are glass cards with a files/lines summary, copy button and relative time. Generated files render as compact colour-coded chips that open the file in the Code panel. Other code blocks are syntax-highlighted with a copy button. Markdown typography lives in `.qa-prose` (the Tailwind typography plugin is not installed).
+- **Generation state** (`GenerationProgress.tsx`): animated gradient border, staged checklist and elapsed timer. Stages are time-based estimates, not real progress — the API is not streamed.
+- **Code viewer** (`CodeViewer.tsx` + `src/lib/highlight.ts`): highlight.js (core + registered languages only), line numbers, wrap toggle, copy, download. File tree folders start expanded.
+- **Command palette** (`CommandPalette.tsx`): Ctrl/⌘+K — projects, templates, files in the open project, and actions.
+- **Toasts** (`Toaster.tsx`): `toast()` / `copyText()` helpers.
+- **Layout:** results panel is a floating glass card (`.qa-workspace`); chat composer floats over the conversation; "jump to latest" button; sidebar gains search and relative times (first 6 projects shown, filter appears above 6).
+- **Phones:** project view shows one pane at a time (Chat / Results toggle, `mobilePane` state). The resizable-panel library puts `className` on an inner element, so the inactive pane is hidden with `[data-slot="resizable-panel"]:has(> .qa-pane-hidden)` in `index.css`.
+- **Naming:** projects created from the home prompt are titled from the prompt (`titleFromPrompt` in `src/lib/files.ts`) instead of "Custom Framework".
+- `sanitizeFilename` / `FILENAME_LINE_RE` moved to `src/lib/files.ts` and shared by the parser and chat chips.
+- Header export buttons shortened (Download / Excel / PowerPoint / PDF); `hasMdFiles` logic unchanged.
+
 ---
 
 ## Known Issues / Open Work
 
 | Priority | Issue | Notes |
 |---|---|---|
+| MEDIUM | Responses are not streamed | Generation progress is a timed estimate. Streaming (`generateContentStream` + SSE) would let files appear live. |
 | LOW | Groq provider has no suggestion chips | By design — Groq returns plain string, no parallel call |
 | LOW | No pagination on project list | `subscribeToProjects` returns all user projects |
 | LOW | Attachment upload UX (Camera/Drive items non-functional) | Dropdown items wired to `fileInputRef.click()` as placeholder |
