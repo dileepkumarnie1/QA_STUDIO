@@ -495,6 +495,13 @@ projects/{projectId}/messages/{messageId}
 - `sanitizeFilename` / `FILENAME_LINE_RE` moved to `src/lib/files.ts` and shared by the parser and chat chips.
 - Header export buttons shortened (Download / Excel / PowerPoint / PDF); `hasMdFiles` logic unchanged.
 
+### Session 20 — Compact Replies + Preview Recovery
+- **Compact reply card** (`ChatMessage.tsx`): replies that contain files now show a 3-line summary, animated stat tiles (files / lines / languages), a language-mix bar, the first 8 file chips (+N more), and the Quick Start commands. The full original text sits behind "Show full response". Replies without files render in full as before. Count-up and entrance animations only play for a reply that has just arrived.
+- **Streamlit preview errors** ("Failed to fetch dynamically imported module … @stlite/browser"): the published package is intact and loads under our sandbox, so the cause is a failed download of a large lazy chunk (Plotly ≈ 7.7 MB, data grid) in the user's browser. The sandboxed iframe has an opaque origin, so nothing is HTTP-cached and every preview load re-downloads the whole runtime. Mitigations:
+  - the stlite page reports the error text to the host via `postMessage({type:'qa-preview-chunk-error'})`; the host reloads the iframe (max 2 automatic retries, `previewRetriesRef`) and shows a toast;
+  - **Reload preview** button in the preview toolbar (`previewKey`);
+  - the preview iframe is mounted on first visit and then kept alive across Code/Preview switches (`previewVisited`) instead of being re-created each time.
+
 ---
 
 ## Known Issues / Open Work
