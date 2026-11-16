@@ -1,9 +1,9 @@
-﻿import express, { Request, Response, NextFunction } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
-import { rateLimit } from 'express-rate-limit';
+import { rateLimit, ipKeyGenerator } from 'express-rate-limit';
 import { initializeApp, getApps, cert, applicationDefault } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 
@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
 
 import type { Message } from '../src/types';
 
-// â”€â”€ Allowed Gemini models â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Allowed Gemini models ───────────────────────────────────────────────────
 const ALLOWED_MODELS = new Set([
   'gemini-2.5-pro',
   'gemini-2.5-flash',
@@ -25,12 +25,18 @@ const ALLOWED_MODELS = new Set([
   'gemini-3.1-flash-lite-preview',
 ]);
 
-// â”€â”€ Input size limits â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Input size limits ───────────────────────────────────────────────────────
 const MAX_PROMPT_CHARS           = 50_000;
 const MAX_PREVIOUS_MESSAGES      = 50;
 const MAX_TEMPLATE_CONTEXT       = 500;
 const MAX_ATTACHMENTS            = 5;
 const MAX_PROJECT_SUMMARY_CHARS  = 2_000;
+const MAX_MESSAGE_CHARS          = 500_000;       // mirrors the Firestore rule
+const MAX_ATTACHMENT_B64_CHARS   = 14_000_000;    // ≈10 MB binary, base64-encoded
+
+// Mirrors the client-side attachment allowlist (validateAndFilterFiles in App.tsx)
+const isAllowedAttachmentMime = (mime: string) =>
+  /^(image\/|text\/|application\/pdf)/i.test(mime) && mime.length <= 100;
 
 interface ProxyAttachment {
   name: string;
@@ -61,40 +67,51 @@ if (!apiKey) {
   throw new Error('GEMINI_API_KEY is required for the backend Gemini proxy.');
 }
 
-// â”€â”€ Firebase Admin (token verification only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Full cryptographic token verification is enabled only when a service account
-// key is configured via GOOGLE_APPLICATION_CREDENTIALS. In local dev without
-// credentials the middleware is bypassed â€” Firestore security rules still
-// enforce per-user data access at the database layer.
+// ── Firebase Admin (ID-token verification) ──────────────────────────────────
+// verifyIdToken() only needs the Firebase project ID — it validates the token
+// signature against Google's public certificates — so authentication is ALWAYS
+// enforced, with or without a service-account key. A service account (via
+// GOOGLE_APPLICATION_CREDENTIALS or FIREBASE_SERVICE_ACCOUNT_JSON) is optional.
 const projectId = process.env.VITE_FIREBASE_PROJECT_ID || 'qa-studio-37f60';
-const hasServiceAccountFile = !!process.env.GOOGLE_APPLICATION_CREDENTIALS;
-const hasServiceAccountJson = !!process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-const hasServiceAccount = hasServiceAccountFile || hasServiceAccountJson;
+const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
 
-let firebaseAuth: ReturnType<typeof getAuth> | null = null;
-if (hasServiceAccount) {
-  try {
-    if (!getApps().length) {
-      if (hasServiceAccountJson) {
-        const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON!);
-        initializeApp({ credential: cert(serviceAccount), projectId });
-      } else {
-        initializeApp({ credential: applicationDefault(), projectId });
-      }
+if (!getApps().length) {
+  let credential: ReturnType<typeof cert> | undefined;
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    try {
+      credential = cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON));
+    } catch {
+      console.warn('[server] FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON — ignoring it.');
     }
-    firebaseAuth = getAuth();
-    console.log('[server] Firebase Admin ready — full token verification enabled.');
-  } catch (e) {
-    console.warn('[server] Firebase Admin init failed:', e instanceof Error ? e.message : e);
+  } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    credential = applicationDefault();
   }
+  initializeApp(credential ? { credential, projectId } : { projectId });
+}
+const firebaseAuth = getAuth();
+
+// Explicit, local-only escape hatch. Never honoured in production.
+const authDisabled = !isProduction && process.env.DISABLE_AUTH === 'true';
+if (authDisabled) {
+  console.warn('[server] DISABLE_AUTH=true — API authentication is OFF (local development only).');
 } else {
-  console.log('[server] No Firebase credentials — token verification skipped (dev mode).');
+  console.log('[server] Firebase ID-token verification enabled.');
 }
 
-// Auth middleware â€” enforces authentication in production, passes through in dev
-const requireAuth = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-  if (!firebaseAuth) {
-    // Dev mode: no service account â€” skip cryptographic verification
+// Optional server-side email allowlist (comma-separated). Falls back to the
+// same VITE_ALLOWED_EMAILS value the client uses so one setting covers both.
+const allowedEmails = new Set(
+  (process.env.ALLOWED_EMAILS || process.env.VITE_ALLOWED_EMAILS || '')
+    .split(',').map((e) => e.trim().toLowerCase()).filter(Boolean),
+);
+
+interface AuthedRequest extends Request {
+  uid?: string;
+}
+
+// Auth middleware — fails closed: no valid Firebase ID token, no access.
+const requireAuth = async (req: AuthedRequest, res: Response, next: NextFunction): Promise<void> => {
+  if (authDisabled) {
     next();
     return;
   }
@@ -104,7 +121,15 @@ const requireAuth = async (req: Request, res: Response, next: NextFunction): Pro
     return;
   }
   try {
-    await firebaseAuth.verifyIdToken(authHeader.slice(7));
+    const decoded = await firebaseAuth.verifyIdToken(authHeader.slice(7));
+    if (allowedEmails.size > 0) {
+      const email = (decoded.email || '').toLowerCase();
+      if (!decoded.email_verified || !allowedEmails.has(email)) {
+        res.status(403).json({ error: 'This account is not authorised to use this app.' });
+        return;
+      }
+    }
+    req.uid = decoded.uid;
     next();
   } catch {
     res.status(401).json({ error: 'Invalid or expired session. Please sign in again.' });
@@ -114,21 +139,64 @@ const requireAuth = async (req: Request, res: Response, next: NextFunction): Pro
 const ai = new GoogleGenAI({ apiKey, httpOptions: { apiVersion: 'v1beta' } });
 const app = express();
 
-// ── CORS ────────────────────────────────────────────────────────────────────
+// Render (and most PaaS hosts) sit behind one reverse proxy. Trust exactly one
+// hop so req.ip is the real client address and rate limits are per-client.
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+
+// ── Security headers ────────────────────────────────────────────────────────
 app.use((_req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-  if (_req.method === 'OPTIONS') { res.sendStatus(204); return; }
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  // Required so the Firebase Google sign-in popup can report back to the app.
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  if (isProduction) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
   next();
 });
 
-// â”€â”€ Rate limiter: 30 requests per minute per IP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── CORS ────────────────────────────────────────────────────────────────────
+// The frontend is served from this same origin (and through the Vite proxy in
+// dev), so cross-origin access is denied by default. To allow another origin,
+// list it in ALLOWED_ORIGINS (comma-separated).
+const allowedOrigins = new Set(
+  (process.env.ALLOWED_ORIGINS || '').split(',').map((o) => o.trim()).filter(Boolean),
+);
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  }
+  if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
+  next();
+});
+
+// ── Rate limiting ───────────────────────────────────────────────────────────
+// 1) Coarse per-IP limit on every /api call, applied BEFORE auth so floods of
+//    unauthenticated requests are cheap to reject.
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please wait a moment before trying again.' },
+});
+app.use('/api', apiLimiter);
+
+// 2) Per-user limit on the expensive AI endpoints: 30 requests per minute,
+//    keyed by the verified Firebase UID (applied after requireAuth).
 const generateLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: (req) => (req as AuthedRequest).uid || ipKeyGenerator(req.ip || ''),
   message: { error: 'Too many requests. Please wait a moment before trying again.' },
 });
 
@@ -510,8 +578,8 @@ app.get('/api/health', (_req, res) => {
 app.post('/api/generate', requireAuth, generateLimiter, async (req, res) => {
   const body = req.body as GenerateRequestBody;
 
-  // â”€â”€ Input validation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  if (!body.prompt?.trim()) {
+  // ── Input validation ────────────────────────────────────────────────────
+  if (!body || typeof body.prompt !== 'string' || !body.prompt.trim()) {
     res.status(400).json({ error: 'Prompt is required.' });
     return;
   }
@@ -531,20 +599,29 @@ app.post('/api/generate', requireAuth, generateLimiter, async (req, res) => {
     : undefined;
 
   // Validate model against allowlist
-  const requestedModel = body.options?.model || 'gemini-2.5-pro';
+  const requestedModel = typeof body.options?.model === 'string' ? body.options.model : 'gemini-2.5-pro';
   const model = ALLOWED_MODELS.has(requestedModel) ? requestedModel : 'gemini-2.5-pro';
 
   // Clamp temperature to [0, 2]
-  const temperature = Math.min(2, Math.max(0, body.options?.temperature ?? 1));
+  const rawTemperature = Number(body.options?.temperature ?? 1);
+  const temperature = Number.isFinite(rawTemperature) ? Math.min(2, Math.max(0, rawTemperature)) : 1;
 
-  // Limit number of previous messages and attachments
-  const previousMessages = (body.previousMessages || []).slice(-MAX_PREVIOUS_MESSAGES);
-  const attachments = (body.attachments || []).slice(0, MAX_ATTACHMENTS);
+  // Validate shape + size of history and attachments — never trust client JSON
+  const previousMessages: Message[] = (Array.isArray(body.previousMessages) ? body.previousMessages : [])
+    .filter((m): m is Message => !!m && typeof m.content === 'string' && (m.role === 'user' || m.role === 'assistant'))
+    .slice(-MAX_PREVIOUS_MESSAGES)
+    .map((m) => ({ ...m, content: m.content.slice(0, MAX_MESSAGE_CHARS) }));
+
+  const attachments: ProxyAttachment[] = (Array.isArray(body.attachments) ? body.attachments : [])
+    .filter((a): a is ProxyAttachment =>
+      !!a && typeof a.data === 'string' && typeof a.mimeType === 'string' &&
+      a.data.length <= MAX_ATTACHMENT_B64_CHARS && isAllowedAttachmentMime(a.mimeType))
+    .slice(0, MAX_ATTACHMENTS);
 
   try {
     const contents = formatGeminiContents(body.prompt, previousMessages, attachments);
 
-    // Always build system instruction server-side â€” never trust client-supplied value
+    // Always build system instruction server-side — never trust client-supplied value
     const outputType = body.options?.outputType === 'playbook' ? 'playbook' : 'framework';
     const systemInstruction = outputType === 'playbook'
       ? buildPlaybookSystemInstruction(templateContext, projectSummary)
@@ -564,7 +641,7 @@ app.post('/api/generate', requireAuth, generateLimiter, async (req, res) => {
       }),
     ]);
 
-    // Parse suggestions â€” expect a raw JSON array from the dedicated call
+    // Parse suggestions — expect a raw JSON array from the dedicated call
     let suggestions: string[] = [];
     try {
       const raw = (suggestionsResponse.text || '').trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/, '').trim();
@@ -629,7 +706,7 @@ Return ONLY the enhanced prompt text.`,
 
 app.post('/api/enhance-prompt', requireAuth, generateLimiter, async (req, res) => {
   const { prompt, level } = req.body as { prompt?: string; level?: string };
-  if (!prompt?.trim() || prompt.length > 10000) {
+  if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 10000) {
     res.status(400).json({ error: 'Prompt is required and must be under 10000 characters.' });
     return;
   }
@@ -652,6 +729,11 @@ app.post('/api/enhance-prompt', requireAuth, generateLimiter, async (req, res) =
 // Serves the Vite build. In dev, Vite handles the frontend directly.
 const distPath = path.resolve(__dirname, '..', 'dist');
 app.use(express.static(distPath));
+
+// Unknown API routes get a JSON 404 rather than the SPA shell.
+app.use('/api', (_req, res) => {
+  res.status(404).json({ error: 'Not found.' });
+});
 
 // SPA fallback — non-API routes return index.html so React Router works.
 app.get('*', (_req, res) => {

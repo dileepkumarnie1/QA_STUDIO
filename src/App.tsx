@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Plus, 
   Search, 
@@ -312,7 +312,17 @@ function AppContent() {
       let match;
       while ((match = codeBlockRegex.exec(msg.content)) !== null) {
         const lang = match[1] || 'txt';
-        let filename = match[2]?.trim();
+        // Filenames come from model output — treat as untrusted. Strip comment
+        // closers, HTML/control characters and path traversal before use in the
+        // file tree, preview HTML and ZIP download.
+        let filename = match[2]
+          ?.replace(/\s*(-->|\*\/)\s*$/, '')
+          .replace(/[<>"'`\\\u0000-\u001f]/g, '')
+          .split('/')
+          .map(seg => seg.trim())
+          .filter(seg => seg && seg !== '.' && seg !== '..')
+          .join('/')
+          .slice(0, 200);
         if (!filename) {
           fileCount++;
           filename = `snippet_${fileCount}.${lang}`;
@@ -523,10 +533,11 @@ function AppContent() {
           scala: '#DC322F', groovy: '#e69f56', txt: '#6b7280', text: '#6b7280',
         };
         const color = langColors[lang?.toLowerCase()] || langColors[ext?.toLowerCase()] || '#6b7280';
+        const escAttr = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         const depth = k.split('/').length - 1;
-        const name = k.split('/').pop();
-        const parentPath = k.split('/').slice(0, -1).join('/');
-        return `<div class="file-row" style="padding-left:${8 + depth * 16}px" title="${k}">
+        const name = escAttr(k.split('/').pop() || '');
+        const parentPath = escAttr(k.split('/').slice(0, -1).join('/'));
+        return `<div class="file-row" style="padding-left:${8 + depth * 16}px" title="${escAttr(k)}">
           <span class="dot" style="background:${color}"></span>
           <span class="fname">${name}</span>
           ${parentPath ? `<span class="fpath">${parentPath}/</span>` : ''}
@@ -614,7 +625,7 @@ function AppContent() {
     });
     const langBadges = Object.entries(langCounts)
       .sort((a, b) => b[1] - a[1])
-      .map(([lang, count]) => `<span class="badge">${lang} <em>${count}</em></span>`)
+      .map(([lang, count]) => `<span class="badge">${lang.replace(/[<>&"']/g, '')} <em>${count}</em></span>`)
       .join('');
 
     const totalLines = fileNames.reduce((s, k) => s + parsedFiles[k].content.split('\n').length, 0);
@@ -1636,6 +1647,7 @@ function AppContent() {
   const handleDownloadPdf = () => {
     if (!richPreviewHtml) return;
     const isStrategy = fileNames.length > 0 && fileNames.every(k => k.toLowerCase().endsWith('.md'));
+    const printNonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
     const printHtml = richPreviewHtml
       .replace('</style>', `
   /* ── Print / PDF overrides ── */
@@ -1654,7 +1666,10 @@ function AppContent() {
     @page { size: A4; margin: 12mm 10mm; }
   }
 </style>`)
-      .replace('</body>', '<script>window.addEventListener("load",function(){window.print();window.addEventListener("afterprint",function(){window.close();});});<\/script></body>');
+      // The print tab is a blob: URL and therefore shares this app's origin, so
+      // lock it down: only the nonce'd print script below may execute.
+      .replace('<head>', `<head>\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'nonce-${printNonce}'"/>`)
+      .replace('</body>', `<script nonce="${printNonce}">window.addEventListener("load",function(){window.print();window.addEventListener("afterprint",function(){window.close();});});<\/script></body>`);
     const blob = new Blob([printHtml], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const w = window.open(url, '_blank');

@@ -58,14 +58,20 @@ export const testConnection = async () => {
 export const saveUserProfile = async (profile: Omit<UserProfile, 'createdAt'> & { createdAt?: number }) => {
   try {
     const userRef = doc(db, 'users', profile.uid);
-    await setDoc(userRef, {
+    const fields = {
       uid: profile.uid,
       email: profile.email,
       displayName: profile.displayName,
       photoURL: profile.photoURL,
       lastLoginAt: profile.lastLoginAt,
-      createdAt: profile.createdAt ?? profile.lastLoginAt,
-    }, { merge: true });
+    };
+    try {
+      // Existing profile: refresh login fields only, so createdAt is preserved.
+      await updateDoc(userRef, fields);
+    } catch {
+      // First sign-in: the document does not exist yet.
+      await setDoc(userRef, { ...fields, createdAt: profile.createdAt ?? profile.lastLoginAt });
+    }
   } catch (error) {
     console.error('Failed to save user profile:', error);
   }
